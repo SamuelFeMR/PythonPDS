@@ -8,11 +8,12 @@ Ele aparece sozinho na lista da página de pose.
 """
 
 from .base import FilterInput, Param, PoseFilter
-from .madgwick_filter import MadgwickFilter
+from .madgwick_filter import MadgwickMargFilter, MadgwickYawFilter
 from .reference_filters import GyroOnlyFilter, TriadFilter
 
-FILTERS = {cls.name: cls for cls in (MadgwickFilter, TriadFilter, GyroOnlyFilter)}
-DEFAULT_FILTER = MadgwickFilter.name
+FILTERS = {cls.name: cls for cls in (
+    MadgwickYawFilter, MadgwickMargFilter, TriadFilter, GyroOnlyFilter)}
+DEFAULT_FILTER = MadgwickYawFilter.name
 
 
 def make_filter(name: str, **params) -> PoseFilter:
