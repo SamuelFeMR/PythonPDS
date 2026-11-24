@@ -47,6 +47,7 @@ def apply_style(root):
     st.configure("Rec.TButton", background=BAD, foreground="white")
     st.map("Rec.TButton", background=[("active", BAD)])
 
+    st.configure("TEntry", fieldbackground=PANEL2, foreground=FG, insertcolor=FG, padding=3)
     st.configure("TCheckbutton", background=PANEL, foreground=FG)
     st.map("TCheckbutton", background=[("active", PANEL)])
     st.configure("TCombobox", fieldbackground=PANEL2, background=PANEL2,

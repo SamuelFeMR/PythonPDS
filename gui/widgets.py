@@ -15,6 +15,9 @@ def run_commands(canvas: tk.Canvas, cmds):
                                arrow=tk.LAST if c[4] else None, dash=c[5])
         elif kind == "poly":
             canvas.create_polygon(*c[1], fill=c[2], outline=c[3])
+        elif kind == "oval":
+            canvas.create_oval(c[1] - c[3], c[2] - c[3], c[1] + c[3], c[2] + c[3],
+                               fill=c[4], outline=c[5])
         elif kind == "text":
             font = ("Segoe UI", c[6]) + (("bold",) if c[7] else ())
             canvas.create_text(c[1], c[2], text=c[3], fill=c[4], anchor=c[5], font=font)
@@ -86,3 +89,17 @@ class OrientationView(tk.Canvas):
             return
         self.delete("all")
         run_commands(self, render.scene_commands(w, h, q, self.az, self.el))
+
+
+class GeometryView(tk.Canvas):
+    """Desenho da barra com os 2 sensores de distância, o cilindro, H e alpha."""
+
+    def __init__(self, master):
+        super().__init__(master, bg=theme.CANVAS_BG, highlightthickness=0)
+
+    def draw(self, result, L, R, message=""):
+        w, h = self.winfo_width(), self.winfo_height()
+        if w < 120 or h < 120:
+            return
+        self.delete("all")
+        run_commands(self, render.geometry_commands(w, h, result, L, R, message))

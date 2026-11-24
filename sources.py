@@ -76,7 +76,11 @@ class DemoSource:
     uses_alignment = False
     label = "Demo (simulado)"
 
-    def __init__(self, rate_hz: float = 50.0):
+    def __init__(self, rate_hz: float = 50.0, geometry=None):
+        # geometry: GeometryConfig (L, R). Os ToF simulados vêm de um cilindro de raio R
+        # se movendo diante da barra de comprimento L, com os raios a 60° (ver geometry.py).
+        self.geo_L = float(geometry.L) if geometry else 150.0
+        self.geo_R = float(geometry.R) if geometry else 60.0
         self.dt = 1.0 / rate_hz
         self.k = 0
         self.q = np.array([1.0, 0, 0, 0])          # verdade (sensor -> navegação)
@@ -98,8 +102,7 @@ class DemoSource:
         a = Q.rotate_inverse(self.q, [0, 0, 1]) + self.rng.normal(0, 0.01, 3)
         g = np.degrees(w + self.bias) + self.rng.normal(0, 0.2, 3)
         m = Q.rotate_inverse(self.q, self.b_nav) + self.rng.normal(0, 1.5, 3)
-        d1 = int(120 + 60 * np.sin(0.8 * t))
-        d2 = int(200 + 80 * np.sin(0.5 * t + 2))
+        d1, d2 = self._tof(t)
         r = int(1300 + 150 * np.sin(0.3 * t))
         gr = int(1100 + 120 * np.sin(0.4 * t + 1))
         b = int(1200 + 100 * np.sin(0.5 * t + 2))
@@ -111,6 +114,26 @@ class DemoSource:
                 f"{d1},{d2},{r},{gr},{b},1,1,1\n")
         self.k += 1
         return line
+
+    def _tof(self, t):
+        """h1 (esquerda) e h2 (direita) de um cilindro que se desloca de lado e se afasta/aproxima."""
+        L, R = self.geo_L, self.geo_R
+        ox = L / 2 + 0.45 * R * np.sin(0.5 * t)                     # deslocamento lateral
+        oz = 0.55 * L + 0.12 * L * np.sin(0.31 * t + 1.0)           # distância ao cilindro
+        O = np.array([ox, oz])
+        self.truth_center = O
+
+        def hit(p0, d):
+            w = p0 - O
+            b, c = w @ d, w @ w - R * R
+            disc = b * b - c
+            return -b - np.sqrt(disc) if disc >= 0 else 0.0
+
+        s60, c60 = np.sin(np.pi / 3), np.cos(np.pi / 3)
+        h1 = hit(np.array([0.0, 0.0]), np.array([c60, s60]))
+        h2 = hit(np.array([L, 0.0]), np.array([-c60, s60]))
+        n = self.rng.normal(0, 0.4, 2)                               # ruído do ToF (mm)
+        return max(1, int(round(h1 + n[0]))), max(1, int(round(h2 + n[1])))
 
     @property
     def truth_q(self):

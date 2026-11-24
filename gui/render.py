@@ -9,6 +9,7 @@ Comandos:
     ("line", [x1,y1,x2,y2,...], cor, largura, seta, tracejado)
     ("poly", [x1,y1,...], preenchimento, contorno)
     ("text", x, y, texto, cor, âncora, tamanho, negrito)
+    ("oval", x, y, raio, preenchimento, contorno)
 """
 
 import numpy as np
@@ -149,4 +150,124 @@ def scene_commands(w, h, q, az, el):
         cmds.append(("text", p2[0], p2[1], name, color, "center", 11, True))
 
     cmds.append(("text", 8, h - 8, "arraste para girar a câmera", theme.MUTED, "sw", 8, False))
+    return cmds
+
+
+# ----------------------------------------------------- sensores de distância
+_C_H1 = theme.SERIES[0]     # sensor 1 (esquerda)
+_C_H2 = theme.SERIES[2]     # sensor 2 (direita)
+
+
+def geometry_commands(w, h, res, L, R, message=""):
+    """
+    Desenho da barra com os dois sensores, os raios, o cilindro, a corda c–d, a
+    tangente em h, a altura H e o ângulo alpha. `res` é um geometry.GeometryResult
+    válido, ou None (então só a barra e `message`). Coordenadas: x ao longo da
+    barra (a -> b), z em direção ao cilindro; z cresce para BAIXO na tela.
+    """
+    import math
+
+    cmds = []
+    s60 = math.sqrt(3) / 2
+    apex = (L / 2, s60 * L)
+
+    # área do desenho (margens para os rótulos)
+    xmin, xmax, zmax = 0.0, L, apex[1]
+    if res is not None:
+        cx, cz = res.center
+        xmin, xmax = min(xmin, cx - R), max(xmax, cx + R)
+        zmax = max(zmax, cz + R)
+    pad = 0.10 * max(xmax - xmin, 1e-9)
+    xmin, xmax = xmin - pad, xmax + pad
+    top, bottom, side = 46, 34, 14
+    sc = min((w - 2 * side) / (xmax - xmin), (h - top - bottom) / max(zmax, 1e-9))
+    x0 = side + ((w - 2 * side) - sc * (xmax - xmin)) / 2
+    y0 = top
+
+    def P(x, z):
+        return (x0 + (x - xmin) * sc, y0 + z * sc)
+
+    def line(a, b, color, width=2, arrow=False, dash=None):
+        cmds.append(("line", [*P(*a), *P(*b)], color, width, arrow, dash))
+
+    def dot(p, rad, fill):
+        cmds.append(("oval", *P(*p), rad, fill, "#0d0f13"))
+
+    def label(p, text, color, anchor="center", size=9, bold=False, dx=0, dy=0):
+        x, y = P(*p)
+        cmds.append(("text", x + dx, y + dy, text, color, anchor, size, bold))
+
+    if res is not None:
+        # cilindro
+        cx, cz = res.center
+        pts = []
+        for i in range(97):
+            t = 2 * math.pi * i / 96
+            pts += list(P(cx + R * math.cos(t), cz + R * math.sin(t)))
+        cmds.append(("line", pts, theme.MUTED, 2, False, None))
+        label((cx, cz), "cilindro", theme.MUTED, size=10)
+
+    # raios: sólidos até o cilindro, tracejados até o vértice P (só como guia)
+    a, b = (0.0, 0.0), (L, 0.0)
+    if res is not None:
+        line(a, res.c, _C_H1, 2.5)
+        line(res.c, apex, _C_H1, 1, dash=(3, 5))
+        line(b, res.d, _C_H2, 2.5)
+        line(res.d, apex, _C_H2, 1, dash=(3, 5))
+    else:
+        line(a, apex, _C_H1, 1, dash=(3, 5))
+        line(b, apex, _C_H2, 1, dash=(3, 5))
+
+    # barra e sensores
+    line(a, b, theme.FG, 6)
+    dot(a, 7, _C_H1)
+    dot(b, 7, _C_H2)
+    label(a, "S1 (esq.)", _C_H1, "s", 9, True, dy=-12)
+    label(b, "S2 (dir.)", _C_H2, "s", 9, True, dy=-12)
+    label(((a[0] + b[0]) / 2, 0), f"barra  L = {L:g}", theme.MUTED, "s", 9, dy=-10)
+
+    if res is None:
+        cmds.append(("text", w / 2, y0 + 0.55 * (h - top - bottom), message or "sem leitura válida",
+                     theme.WARN, "center", 11, True))
+        return cmds
+
+    # corda c–d
+    line(res.c, res.d, theme.WARN, 2)
+    dot(res.c, 5, _C_H1)
+    dot(res.d, 5, _C_H2)
+    mid1 = (res.c[0] / 2, res.c[1] / 2)                        # meio do raio a–c
+    mid2 = ((L + res.d[0]) / 2, res.d[1] / 2)                  # meio do raio b–d
+    label(mid1, f"h1 = {res.h1:g}", _C_H1, "e", 10, True, dx=-8)
+    label(mid2, f"h2 = {res.h2:g}", _C_H2, "w", 10, True, dx=8)
+
+    # ponto h, tangente (paralela à corda), altura H e ângulo alpha
+    al = math.radians(res.alpha_deg)
+    hx, hz = res.h
+    tl = 0.32 * L
+    tdir = (math.cos(al), math.sin(al))
+    line((hx - tdir[0] * tl, hz - tdir[1] * tl), (hx + tdir[0] * tl, hz + tdir[1] * tl), theme.GOOD, 2)
+    line((hx - tl, hz), (hx + tl, hz), theme.MUTED, 1, dash=(4, 4))       # paralela à barra
+    line((hx, 0.0), (hx, hz), theme.GOOD, 2, True, (6, 3))                  # H
+    dot(res.h, 5, theme.GOOD)
+    label((hx, hz / 2), f"H = {res.H:.1f}", theme.GOOD, "w", 10, True, dx=8)
+    label(res.h, "h", theme.GOOD, "se", 10, True, dx=-7, dy=-5)
+
+    # arco do ângulo alpha, à direita de h
+    rad = 0.16 * L
+    arc = []
+    n = 14
+    for i in range(n + 1):
+        t = al * i / n
+        arc += list(P(hx + rad * math.cos(t), hz + rad * math.sin(t)))
+    if abs(res.alpha_deg) > 0.3:
+        cmds.append(("line", arc, theme.GOOD, 1.5, False, None))
+    if abs(res.alpha_deg) > 0.3:
+        label((hx + rad, hz + rad * math.sin(al / 2)), "α", theme.GOOD, "w", 11, True, dx=4)
+
+    cmds.append(("text", 10, 8, "x: ao longo da barra   z: em direção ao cilindro   (mesma unidade das leituras)",
+                 theme.MUTED, "nw", 8, False))
+    info = f"α = {res.alpha_deg:+.1f}°     H = {res.H:.1f}     corda c–d = {res.Y:.1f}"
+    cmds.append(("text", 10, h - 8, info, theme.GOOD, "sw", 11, True))
+    if res.warning:
+        cmds.append(("text", w - 10, h - 8, res.warning, theme.WARN, "se", 9, True))
     return cmds

@@ -43,15 +43,18 @@ class RingBuffer:
 class DataStore:
     RAW_COLS = 14   # ver sample.RAW_COLUMNS
     POSE_COLS = 9   # roll, pitch, yaw, tilt, qw, qx, qy, qz, |a|
+    GEOM_COLS = 5   # h1, h2, alpha, H, Y  (só amostras válidas)
 
     def __init__(self):
         self.lock = threading.Lock()
         self.raw = RingBuffer(self.RAW_COLS)
         self.pose = RingBuffer(self.POSE_COLS)
+        self.geom = RingBuffer(self.GEOM_COLS)
         self.t0_us = None
         self._prev_t_us = None
         self.latest_sample = None
         self.latest_pose = None
+        self.latest_geom = None
         self.valid = 0
         self.invalid = 0
         self.rate_hz = 0.0
@@ -63,10 +66,12 @@ class DataStore:
         with self.lock:
             self.raw.clear()
             self.pose.clear()
+            self.geom.clear()
             self.t0_us = None
             self._prev_t_us = None
             self.latest_sample = None
             self.latest_pose = None
+            self.latest_geom = None
             self.valid = 0
             self.invalid = 0
             self.rate_hz = 0.0
@@ -92,6 +97,12 @@ class DataStore:
             self.pose.append(pose.t_s, pose.as_row())
             self.latest_pose = pose
 
+    def add_geom(self, g):
+        with self.lock:
+            self.latest_geom = g
+            if g.valid:
+                self.geom.append(g.t_s, g.as_row())
+
     def count_bad(self):
         with self.lock:
             self.invalid += 1
@@ -110,6 +121,10 @@ class DataStore:
     def snapshot_pose(self, window_s: float):
         with self.lock:
             return self.pose.window(window_s)
+
+    def snapshot_geom(self, window_s: float):
+        with self.lock:
+            return self.geom.window(window_s)
 
     def counters(self):
         with self.lock:

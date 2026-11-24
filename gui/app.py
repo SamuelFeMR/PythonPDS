@@ -12,6 +12,7 @@ from pipeline import Pipeline
 from sources import DemoSource, ReplaySource, SerialSource
 
 from . import theme
+from .page_geom import GeomPage
 from .page_pose import PosePage
 from .page_raw import RawPage
 
@@ -38,7 +39,8 @@ class App(tk.Tk):
         self.container.columnconfigure(0, weight=1)
 
         # Para criar outra página: classe nova (herda de Page) + uma linha aqui.
-        self.page_defs = (("pose", "1 · Pose", PosePage), ("raw", "2 · Dados brutos", RawPage))
+        self.page_defs = (("pose", "1 · Pose", PosePage), ("raw", "2 · Dados brutos", RawPage),
+                          ("geom", "3 · Distância", GeomPage))
         self.pages = {}
         for key, _, cls in self.page_defs:
             page = cls(self.container, self)
@@ -145,7 +147,7 @@ class App(tk.Tk):
         self.engine.start(lambda: SerialSource(port, baud))
 
     def _start_demo(self):
-        self.engine.start(DemoSource)
+        self.engine.start(lambda: DemoSource(geometry=self.pipeline.geometry_cfg))
 
     def _open_file(self):
         path = filedialog.askopenfilename(

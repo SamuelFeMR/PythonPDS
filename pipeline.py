@@ -15,6 +15,7 @@ from typing import Optional
 
 import numpy as np
 
+import geometry
 import quaternion as Q
 from filters import DEFAULT_FILTER, FILTERS, FilterInput, make_filter
 from sample import Sample
@@ -44,6 +45,36 @@ class PoseState:
         return [*self.euler_deg, self.tilt_deg, *self.q, self.accel_norm]
 
 
+@dataclass
+class GeometryState:
+    """Resultado dos sensores de distância (h1 = esquerda, h2 = direita)."""
+    t_s: float
+    h1: float
+    h2: float
+    valid: bool
+    reason: str = ""
+    result: Optional[geometry.GeometryResult] = None   # pontos para desenhar
+
+    @property
+    def alpha_deg(self):
+        return self.result.alpha_deg if self.result else float("nan")
+
+    @property
+    def H(self):
+        return self.result.H if self.result else float("nan")
+
+    @property
+    def Y(self):
+        return self.result.Y if self.result else float("nan")
+
+    @property
+    def warning(self):
+        return self.result.warning if self.result else ""
+
+    def as_row(self):
+        return [self.h1, self.h2, self.alpha_deg, self.H, self.Y]
+
+
 class Pipeline:
     def __init__(self):
         self.lock = threading.RLock()
@@ -63,6 +94,10 @@ class Pipeline:
         self._calib_buf = []
         self._prev_t_us: Optional[int] = None
         self._t0_us: Optional[int] = None
+
+        # sensores de distância (geometry.py)
+        self.geometry_cfg = geometry.load_config()
+        self._geo_t0_us: Optional[int] = None
 
     # -------------------------------------------------------- alinhamento
     def reload_alignment(self):
@@ -124,6 +159,27 @@ class Pipeline:
             self.filter.reset()
             self._prev_t_us = None
             self._t0_us = None
+            self._geo_t0_us = None
+
+    # ------------------------------------------------- sensores de distância
+    def set_geometry(self, L: float, R: float, save: bool = True) -> str:
+        """Define L (distância entre sensores) e R (raio do cilindro), na unidade das leituras."""
+        if not (L > 0 and R > 0):
+            raise ValueError("L e R precisam ser positivos")
+        with self.lock:
+            self.geometry_cfg = geometry.GeometryConfig(L=float(L), R=float(R), saved=save)
+        return geometry.save_config(self.geometry_cfg) if save else ""
+
+    def process_geometry(self, s: Sample) -> GeometryState:
+        with self.lock:
+            if self._geo_t0_us is None:
+                self._geo_t0_us = s.t_us
+            t = (s.t_us - self._geo_t0_us) * 1e-6
+            cfg = self.geometry_cfg
+        if not s.tof_ok:
+            return GeometryState(t, float(s.dist1), float(s.dist2), False, "ToF inválido (tof_ok = 0)")
+        r = geometry.compute(s.dist1, s.dist2, cfg.L, cfg.R)
+        return GeometryState(t, float(s.dist1), float(s.dist2), r.valid, r.reason, r)
 
     # ------------------------------------------------------------ passo
     def process(self, s: Sample) -> Optional[PoseState]:

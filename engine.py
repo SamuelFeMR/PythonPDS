@@ -108,6 +108,7 @@ class Engine:
                 prev_t_us = s.t_us
 
                 self.store.add_raw(s)
+                self.store.add_geom(self.pipeline.process_geometry(s))
                 try:
                     pose = self.pipeline.process(s)
                 except Exception as e:
