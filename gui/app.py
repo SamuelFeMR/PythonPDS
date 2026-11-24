@@ -20,7 +20,7 @@ REFRESH_MS = 40
 
 
 class App(tk.Tk):
-    def __init__(self):
+    def __init__(self, port=None, baud=None, demo=False):
         super().__init__()
         self.title("TCC · IMU / Pose")
         self.geometry("1280x800")
@@ -53,6 +53,15 @@ class App(tk.Tk):
             self.bind(f"<F{i}>", lambda e, k=key: self.show_page(k))
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(REFRESH_MS, self._tick)
+
+        # Conexão automática (opcional): python main_gui.py --port COM7  /  --demo
+        if baud:
+            self.baud_var.set(str(baud))
+        if demo:
+            self.after(300, self._start_demo)
+        elif port:
+            self.port_var.set(port)
+            self.after(300, self._toggle_connect)
 
     # ----------------------------------------------------------- barra topo
     def _build_topbar(self):
