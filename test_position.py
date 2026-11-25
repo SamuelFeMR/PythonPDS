@@ -137,6 +137,40 @@ def main():
     # o giro do yaw leva a normal do IMU até a longitude da cor
     assert abs(p0.azimuth_deg) < 1e-9 and abs(p1.yaw_shift_deg - 120) < 1e-9
     assert np.linalg.norm(P.rotate_z(p1.yaw_shift_deg) @ p0.normal - p1.normal) < 1e-12
+
+    # --- fusão da longitude: orientação (curto prazo) + cor (referência absoluta)
+    F = P.LongitudeFusion(rate=0.5, gate_deg=60.0)
+    t = 0.0
+    lon, src, d = F.update(t, 30.0, 40.0, None)                 # sem cor: segue o IMU
+    assert src == "imu" and abs(lon - 30) < 1e-9
+    lon, src, d = F.update(t := t + 0.02, 30.0, 40.0, 100.0)    # 1ª cor: alinha (Δ = 70)
+    assert src == "fusão" and abs(d - 70) < 1e-9 and abs(lon - 100) < 1e-9
+    for az in range(30, 330, 3):                                # anda pela esfera: cor acompanha
+        lon, src, d = F.update(t := t + 0.02, float(az), 40.0, (az + 70.0) % 360)
+        assert src == "fusão" and abs(d - 70) < 1e-6
+    # o caso do teste: inclina para o lado OPOSTO (azimute do IMU +180°) com a cor parada
+    az0 = 330.0
+    lon0 = (az0 + 70) % 360
+    lon, src, d = F.update(t := t + 0.02, (az0 + 180) % 360, 40.0, lon0)
+    assert src == "discordante" and abs(P.wrap180(lon - (lon0 + 180))) < 1e-6   # foi para o outro lado
+    for _ in range(500):                                        # e continua lá, com a cor parada
+        lon, src, d = F.update(t := t + 0.02, (az0 + 180) % 360, 40.0, lon0)
+    assert src == "discordante" and abs(P.wrap180(lon - (lon0 + 180))) < 1e-6
+    # sem cor válida o Δ é mantido e o IMU conduz
+    lon, src, d = F.update(t := t + 0.02, 100.0, 40.0, None)
+    assert src == "imu" and abs(d - 70) < 1e-6 and abs(lon - 170) < 1e-6
+    # deriva do yaw: Δ verdadeiro muda de 70 para 100 (dentro do gate) -> a cor corrige devagar
+    for _ in range(1500):                                       # 30 s a 50 Hz
+        lon, src, d = F.update(t := t + 0.02, 100.0, 40.0, 200.0)
+    assert src == "fusão" and abs(d - 100) < 0.5, d
+    # perto do polo a cor não conta
+    F2 = P.LongitudeFusion()
+    F2.update(0.0, 0.0, 40.0, 50.0)
+    lon, src, d = F2.update(0.02, 10.0, 2.0, 300.0)
+    assert src == "imu" and abs(d - 50) < 1e-9
+    F2.reset()
+    assert F2.delta is None
+    print("fusão da longitude: OK")
     print("OK")
 
 

@@ -21,11 +21,18 @@ O ponto na esfera é o ângulo do polo (polar) e o azimute da normal. Nada é tr
 polar passar de 90° (abaixo do equador) é porque a orientação diz que os sensores olham para
 cima, e isso é mostrado como aviso (normalmente é o eixo dos sensores errado na configuração).
 
-LONGITUDE: o polar vem da orientação × α; a longitude de verdade vem da COR da esfera
-(sphere_color.py, gradiente do gomos_r9.py). O azimute que a orientação dá está no referencial
-do MUNDO (magnético); a longitude da cor está no referencial da ESFERA. A diferença é um giro
-em torno da vertical (yaw_shift_deg) que with_longitude() calcula; ele gira o desenho inteiro
-da placa (não só o ponto), e assim a placa nunca fica olhando para outro lado que não o ponto.
+LONGITUDE (fusão): o polar vem da orientação × α. O azimute da orientação responde na hora ao
+LADO para onde a placa inclina, mas está no referencial do MUNDO (e deriva com o yaw). A COR da
+esfera (sphere_color.py, gradiente do gomos_r9.py) dá a longitude no referencial da ESFERA,
+sem deriva, mas só enquanto o sensor enxerga a cor. A diferença entre as duas é um giro em torno
+da vertical, Δ (yaw_shift_deg), que LongitudeFusion estima devagar (filtro complementar):
+
+        longitude = azimute_do_IMU + Δ        Δ ← Δ + taxa·dt·(cor − (azimute_do_IMU + Δ))
+
+Assim a orientação manda no curto prazo (inverter a inclinação leva o ponto para o outro lado
+da esfera) e a cor corrige a deriva. Cor muito diferente da prevista (mais que `gate`) é
+descartada como discordante. Δ gira a placa inteira junto com o ponto, então a placa nunca
+fica olhando para outro lado que não o ponto.
 
 POSE COMPLETA (scene_points): o ponto medido h fica na superfície; a barra fica a H dele,
 no lado dos sensores; os raios dos dois sensores terminam exatamente em c e d, na superfície.
@@ -75,8 +82,9 @@ class Position:
     azimuth_deg: float            # direção do ponto (0 = +X/norte, 90 = +Y); 0 no polo
     alpha_deg: float              # α usado
     alpha_assumed: bool = False   # True: sem ToF válido, usou α = 0
-    lon_source: str = "imu"       # de onde veio o azimute: "cor", "cor retida" ou "imu"
+    lon_source: str = "imu"       # origem do azimute: "fusão", "discordante" (cor descartada) ou "imu"
     yaw_shift_deg: float = 0.0    # giro (em torno de Z) que leva o mundo ao referencial da esfera
+    lon_color_deg: object = None  # longitude lida na cor neste instante (None = sem cor válida)
 
     @property
     def below_equator(self) -> bool:
@@ -105,8 +113,12 @@ def compute(t_s: float, q, alpha_deg, bar_axis: str = DEFAULT_BAR,
     return Position(t_s, n, polar, azim, alpha, assumed)
 
 
-def with_longitude(pos: Position, lon_deg, source: str) -> Position:
-    """Troca o azimute pela longitude lida na COR (None = mantém o do IMU), sem mexer no polar.
+def wrap180(deg: float) -> float:
+    return (deg + 180.0) % 360.0 - 180.0
+
+
+def with_longitude(pos: Position, lon_deg, source: str, lon_color=None) -> Position:
+    """Põe o azimute na longitude da ESFERA (None = mantém o do IMU), sem mexer no polar.
     O giro necessário (yaw_shift_deg) fica guardado para girar a placa junto."""
     if lon_deg is None:
         return pos
@@ -114,7 +126,39 @@ def with_longitude(pos: Position, lon_deg, source: str) -> Position:
     n = np.array([math.sin(th) * math.cos(lam), math.sin(th) * math.sin(lam), math.cos(th)])
     shift = 0.0 if 1e-6 > pos.polar_deg or pos.polar_deg > 180 - 1e-6 else (lon_deg - pos.azimuth_deg)
     return Position(pos.t_s, n, pos.polar_deg, float(lon_deg) % 360.0, pos.alpha_deg,
-                    pos.alpha_assumed, source, (shift + 180.0) % 360.0 - 180.0)
+                    pos.alpha_assumed, source, wrap180(shift), lon_color)
+
+
+class LongitudeFusion:
+    """Filtro complementar da longitude: azimute do IMU + Δ, com Δ corrigido devagar pela cor."""
+
+    def __init__(self, rate: float = 0.5, gate_deg: float = 60.0, min_polar_deg: float = 5.0):
+        self.rate, self.gate, self.min_polar = rate, gate_deg, min_polar_deg
+        self.reset()
+
+    def reset(self):
+        self.delta = None       # Δ ainda não conhecido: usa o azimute do mundo
+        self._t = None
+
+    def update(self, t_s: float, az_imu: float, polar: float, lon_color, min_polar=None):
+        """-> (longitude da esfera em graus, origem, Δ). Origem: "fusão" (cor aceita),
+        "discordante" (cor descartada), "imu" (sem cor válida; Δ vem da última fusão)."""
+        dt = 0.0 if self._t is None else t_s - self._t
+        dt = dt if 0.0 < dt < 0.5 else (0.0 if self._t is None else 0.02)
+        self._t = t_s
+        usable = lon_color is not None and polar >= (self.min_polar if min_polar is None else min_polar)
+        if self.delta is None:
+            if not usable:
+                return az_imu % 360.0, "imu", 0.0
+            self.delta = wrap180(lon_color - az_imu)         # primeira leitura de cor: alinha
+            return lon_color % 360.0, "fusão", self.delta
+        if not usable:
+            return (az_imu + self.delta) % 360.0, "imu", self.delta
+        err = wrap180(lon_color - (az_imu + self.delta))
+        if abs(err) > self.gate:
+            return (az_imu + self.delta) % 360.0, "discordante", self.delta
+        self.delta = wrap180(self.delta + min(1.0, self.rate * dt) * err)
+        return (az_imu + self.delta) % 360.0, "fusão", self.delta
 
 
 def scene_points(res, L: float, R_mm: float, Rd: np.ndarray, bar: np.ndarray, toward: np.ndarray,

@@ -79,12 +79,12 @@ class MainPage(ttk.Frame):
         header("POSE")
         self.vars = {}
         row = nxt()
-        for i, key in enumerate(("roll", "pitch", "yaw", "tilt", "polo", "lon")):
+        for i, key in enumerate(("roll", "pitch", "yaw", "tilt", "polo", "lon", "cor", "delta")):
             v = tk.StringVar(value=f"{key:<5} —")
             ttk.Label(side, textvariable=v, style="Mono.TLabel").grid(
                 row=row + i // 2, column=i % 2, sticky="w")
             self.vars[key] = v
-        nxt(), nxt()   # 3 linhas: roll/pitch, yaw/tilt, polo/lon
+        nxt(), nxt(), nxt()   # 4 linhas: roll/pitch, yaw/tilt, polo/lon, cor/Δ
         self.pos_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(side, text="Posição do sensor RGB na esfera", variable=self.pos_var
                         ).grid(row=nxt(), column=0, columnspan=2, sticky="w", pady=(6, 0))
@@ -193,8 +193,11 @@ class MainPage(ttk.Frame):
                 self.vars[key].set(f"{key:<5}{val:+7.1f}°")
         if pos:   # ponto na esfera: polo = orientação × α, lon = cor da esfera
             self.vars["polo"].set(f"polo {pos.polar_deg:7.1f}°")
-            tag = {"cor": "cor", "cor retida": "ret", "imu": "imu"}[pos.lon_source]
+            tag = {"fusão": "fus", "discordante": "dis", "imu": "imu"}[pos.lon_source]
             self.vars["lon"].set(f"lon {pos.azimuth_deg:6.1f}° {tag}")
+            c = pos.lon_color_deg
+            self.vars["cor"].set(f"cor {c:6.1f}°" if c is not None else "cor      —")
+            self.vars["delta"].set(f"Δ {pos.yaw_shift_deg:+7.1f}°")
 
         t, d = self.store.snapshot_pose(WINDOW_S)
         self.chart.update_data(t, d[:, :4] if len(t) else d, WINDOW_S)

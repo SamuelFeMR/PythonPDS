@@ -98,7 +98,7 @@ class Pipeline:
         self.filter = None
         self.filter_message = ""
         self.color_cfg = sphere_color.ColorConfig()
-        self._lon_hold = None      # última longitude lida pela cor
+        self._fusion = position.LongitudeFusion()   # longitude: orientação + cor
         self.reload_configs()
 
         self.gyro_bias = np.zeros(3)
@@ -145,6 +145,8 @@ class Pipeline:
         cfg = filter_config.load()
         with self.lock:
             self.color_cfg = sphere_color.load()
+            self._fusion.rate = self.color_cfg.fusion_rate
+            self._fusion.gate = self.color_cfg.fusion_gate_deg
             self.filter_name = cfg.filter
             self.filter = make_filter(cfg.filter, **cfg.params)
             self.use_mag = cfg.use_mag
@@ -175,7 +177,7 @@ class Pipeline:
             self._geo_t0_us = None
             self._tof_win.clear()
             self._tof_cal = None
-            self._lon_hold = None
+            self._fusion.reset()
 
     # ------------------------------------------------- sensores de distância
     def set_geometry(self, L: float, R: float, save: bool = True,
@@ -232,17 +234,14 @@ class Pipeline:
         alpha = geom.alpha_deg if geom is not None and geom.valid else None
         pos = position.compute(pose.t_s, pose.q, alpha, cfg.bar_axis, cfg.toward_axis)
 
-        lon = None
+        lon_c = None
         if s is not None and s.color_ok:
-            lon, _ = sphere_color.read_longitude(s.red, s.green, s.blue, ccfg)
-        # na calota vermelha do polo a longitude não existe: não atualiza
-        if lon is not None and pos.polar_deg >= sphere_color.pole_cap_deg(cfg.R, ccfg):
-            with self.lock:
-                self._lon_hold = lon
-            return position.with_longitude(pos, lon, "cor")
+            lon_c, _ = sphere_color.read_longitude(s.red, s.green, s.blue, ccfg)
+        # na calota vermelha do polo (e muito perto dele) a longitude não existe: cor não conta
+        min_polar = max(5.0, sphere_color.pole_cap_deg(cfg.R, ccfg))
         with self.lock:
-            hold = self._lon_hold
-        return position.with_longitude(pos, hold, "cor retida")
+            lon, src, _ = self._fusion.update(pose.t_s, pos.azimuth_deg, pos.polar_deg, lon_c, min_polar)
+        return position.with_longitude(pos, lon, src, lon_c)
 
     # ------------------------------------------------- calibração do ToF
     def start_tof_calibration(self, H_known: float) -> str:

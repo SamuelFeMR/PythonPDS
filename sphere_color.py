@@ -19,7 +19,9 @@ os padrões se não existir):
       "min_signal": 50,              # maior canal (já com ganho) abaixo disso = sem sinal
       "min_saturation": 0.3,         # cor lavada demais (ex.: papel branco) = rejeitada
       "hue_offset_deg": 0.0,         # soma ao matiz medido: corrige o desvio do sensor
-      "pole_diameter_mm": 10.0       # calota vermelha do polo (1 cm no gomos_r9.py)
+      "pole_diameter_mm": 10.0,      # calota vermelha do polo (1 cm no gomos_r9.py)
+      "fusion_rate": 0.5,            # 1/s: quão rápido a cor corrige a longitude da orientação
+      "fusion_gate_deg": 60.0        # cor mais distante que isso da prevista é descartada
     }
 """
 
@@ -43,6 +45,8 @@ class ColorConfig:
     min_saturation: float = 0.3
     hue_offset_deg: float = 0.0
     pole_diameter_mm: float = 10.0
+    fusion_rate: float = 0.5
+    fusion_gate_deg: float = 60.0
     message: str = ""
 
 
@@ -87,7 +91,8 @@ def default_dict() -> dict:
     c = ColorConfig()
     return {"rgb_gain": list(c.rgb_gain), "min_signal": c.min_signal,
             "min_saturation": c.min_saturation, "hue_offset_deg": c.hue_offset_deg,
-            "pole_diameter_mm": c.pole_diameter_mm}
+            "pole_diameter_mm": c.pole_diameter_mm, "fusion_rate": c.fusion_rate,
+            "fusion_gate_deg": c.fusion_gate_deg}
 
 
 def load() -> ColorConfig:
@@ -112,9 +117,12 @@ def load() -> ColorConfig:
             min_signal=float(d.get("min_signal", 50.0)),
             min_saturation=float(d.get("min_saturation", 0.3)),
             hue_offset_deg=float(d.get("hue_offset_deg", 0.0)),
-            pole_diameter_mm=float(d.get("pole_diameter_mm", 10.0)))
-        if not all(math.isfinite(x) for x in (cfg.min_signal, cfg.min_saturation,
-                                               cfg.hue_offset_deg, cfg.pole_diameter_mm)):
+            pole_diameter_mm=float(d.get("pole_diameter_mm", 10.0)),
+            fusion_rate=float(d.get("fusion_rate", 0.5)),
+            fusion_gate_deg=float(d.get("fusion_gate_deg", 60.0)))
+        if not all(math.isfinite(x) for x in (cfg.min_signal, cfg.min_saturation, cfg.hue_offset_deg,
+                                               cfg.pole_diameter_mm, cfg.fusion_rate,
+                                               cfg.fusion_gate_deg)):
             raise ValueError("valor não numérico")
         return cfg
     except (OSError, ValueError, TypeError, AttributeError) as e:
