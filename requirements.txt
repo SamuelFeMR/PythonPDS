@@ -1,2 +1,4 @@
 numpy
 pyserial
+matplotlib
+# scipy  (opcional: salvar dados em .mat)

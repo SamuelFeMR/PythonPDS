@@ -8,6 +8,7 @@ from tkinter import ttk
 
 from . import theme
 from .dialog_geometry import GeometryDialog
+from .plot_window import PlotWindow
 from .render import ToFInfo
 from .widgets import OrientationView, StripChart
 
@@ -36,6 +37,7 @@ class MainPage(ttk.Frame):
         self.engine = app.engine
         self._cal_msg = ""
         self._dialog = None
+        self._plots = None
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
@@ -113,6 +115,8 @@ class MainPage(ttk.Frame):
                    ).grid(row=row, column=0, sticky="we", padx=(0, 3))
         ttk.Button(side, text="Geometria…", command=self._open_geometry
                    ).grid(row=row, column=1, sticky="we", padx=(3, 0))
+        ttk.Button(side, text="Gráficos…", command=self._open_plots
+                   ).grid(row=nxt(), column=0, columnspan=2, sticky="we", pady=(4, 0))
         self.rec_btn = ttk.Button(side, text="● Gravar CSV", command=self._toggle_rec)
         self.rec_btn.grid(row=nxt(), column=0, columnspan=2, sticky="we", pady=(4, 0))
         self.info = ttk.Label(side, text="", style="Muted.TLabel", wraplength=250, justify="left")
@@ -146,6 +150,12 @@ class MainPage(ttk.Frame):
             self._dialog.lift()
             return
         self._dialog = GeometryDialog(self.app, self.pipeline)
+
+    def _open_plots(self):
+        if self._plots is not None and self._plots.winfo_exists():
+            self._plots.lift()
+            return
+        self._plots = PlotWindow(self.app, self.app.store)
 
     def _toggle_rec(self):
         if self.engine.recording:

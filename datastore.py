@@ -9,6 +9,8 @@ import threading
 
 import numpy as np
 
+import quantities
+
 
 class RingBuffer:
     def __init__(self, cols: int, cap: int = 12000):
@@ -50,6 +52,8 @@ class DataStore:
         self.raw = RingBuffer(self.RAW_COLS)
         self.pose = RingBuffer(self.POSE_COLS)
         self.geom = RingBuffer(self.GEOM_COLS)
+        # histórico de TODAS as grandezas (quantities.py) para gráficos: ~12 min a 50 Hz
+        self.history = RingBuffer(quantities.N, cap=36000)
         self.t0_us = None
         self._prev_t_us = None
         self.latest_sample = None
@@ -68,6 +72,7 @@ class DataStore:
             self.raw.clear()
             self.pose.clear()
             self.geom.clear()
+            self.history.clear()
             self.t0_us = None
             self._prev_t_us = None
             self.latest_sample = None
@@ -103,6 +108,12 @@ class DataStore:
         with self.lock:
             self.latest_position = p
 
+    def add_history(self, row):
+        """Uma linha por amostra (quantities.row), com o mesmo tempo do buffer bruto."""
+        with self.lock:
+            if self.t0_us is not None and self.latest_sample is not None:
+                self.history.append((self.latest_sample.t_us - self.t0_us) * 1e-6, row)
+
     def add_geom(self, g):
         with self.lock:
             self.latest_geom = g
@@ -127,6 +138,11 @@ class DataStore:
     def snapshot_pose(self, window_s: float):
         with self.lock:
             return self.pose.window(window_s)
+
+    def snapshot_history(self, window_s: float = 1e12):
+        """(t, matriz n×len(quantities.KEYS)) dos últimos `window_s` s (padrão: tudo)."""
+        with self.lock:
+            return self.history.window(window_s)
 
     def snapshot_geom(self, window_s: float):
         with self.lock:

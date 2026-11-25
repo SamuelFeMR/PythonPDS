@@ -8,6 +8,8 @@ DataStore. A interface só lê o DataStore.
 import threading
 import traceback
 
+import quantities
+
 from datastore import DataStore
 from pipeline import Pipeline
 from sample import parse_sample
@@ -110,6 +112,7 @@ class Engine:
                 self.store.add_raw(s)
                 geom = self.pipeline.process_geometry(s)
                 self.store.add_geom(geom)
+                pose = pos = None
                 try:
                     pose = self.pipeline.process(s)
                 except Exception as e:
@@ -117,9 +120,10 @@ class Engine:
                     last = traceback.extract_tb(e.__traceback__)[-1]
                     self.store.set_error(
                         f"Filtro: {type(e).__name__}: {e} ({last.filename.split('/')[-1].split(chr(92))[-1]}:{last.lineno})")
-                    continue
                 if pose is not None:
                     self.store.add_pose(pose)
-                    self.store.add_position(self.pipeline.process_position(pose, geom, s))
+                    pos = self.pipeline.process_position(pose, geom, s)
+                    self.store.add_position(pos)
+                self.store.add_history(quantities.row(s, pose, geom, pos))
         finally:
             source.close()
