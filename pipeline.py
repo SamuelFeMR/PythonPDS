@@ -172,22 +172,16 @@ class Pipeline:
             self._tof_cal = None
 
     # ------------------------------------------------- sensores de distância
-    def set_geometry(self, L: float, R: float, save: bool = True,
-                     bar_axis: Optional[str] = None, toward_axis: Optional[str] = None) -> str:
-        """Define L (distância entre sensores) e R (raio), na unidade das leituras, e
-        (opcional) os eixos da placa usados no desenho 3D. Sem eixos = mantém os atuais."""
+    def set_geometry(self, L: float, R: float, save: bool = True) -> str:
+        """Define L (distância entre sensores) e R (raio), na unidade das leituras."""
         if not (L > 0 and R > 0):
             raise ValueError("L e R precisam ser positivos")
         old = self.geometry_cfg
-        ba = bar_axis or old.bar_axis
-        ta = toward_axis or old.toward_axis
-        if not geometry.axes_ok(ba, ta):
-            raise ValueError("o eixo da barra e o eixo para o cilindro precisam ser de eixos diferentes")
         with self.lock:
             # a calibração do ToF foi calculada com o L e o R antigos: mudou, apaga
             same = float(L) == old.L and float(R) == old.R
             self.geometry_cfg = geometry.GeometryConfig(
-                L=float(L), R=float(R), saved=save, bar_axis=ba, toward_axis=ta,
+                L=float(L), R=float(R), saved=save,
                 tof_offset=old.tof_offset if same else 0.0)
             if not same and old.tof_offset:
                 self._tof_cal_text = "L ou R mudou: calibração do ToF apagada"
@@ -233,7 +227,7 @@ class Pipeline:
             self._tof_cal = None
             cfg = self.geometry_cfg
             self.geometry_cfg = geometry.GeometryConfig(
-                cfg.L, cfg.R, cfg.saved, cfg.bar_axis, cfg.toward_axis, 0.0)
+                cfg.L, cfg.R, cfg.saved, 0.0)
             self._tof_cal_text = "calibração do ToF removida"
             if cfg.saved:
                 geometry.save_config(self.geometry_cfg)
@@ -247,7 +241,7 @@ class Pipeline:
             self._tof_cal_text = f"calibração falhou: {why}"
             return
         self.geometry_cfg = geometry.GeometryConfig(
-            cfg.L, cfg.R, cfg.saved, cfg.bar_axis, cfg.toward_axis, off)
+            cfg.L, cfg.R, cfg.saved, off)
         try:
             geometry.save_config(self.geometry_cfg)
             self._tof_cal_text = f"ToF calibrado em H = {cal['H']:g}: offset {off:+.2f}"

@@ -57,23 +57,11 @@ WARN_CHORD_RATIO = 0.95
 
 
 # ---------------------------------------------------------------- configuração
-AXES = ("+X", "-X", "+Y", "-Y", "+Z", "-Z")
-
-
-def axes_ok(bar_axis: str, toward_axis: str) -> bool:
-    """Os dois eixos precisam existir e ser de eixos DIFERENTES da placa."""
-    return (bar_axis in AXES and toward_axis in AXES
-            and bar_axis[-1] != toward_axis[-1])
-
-
 @dataclass
 class GeometryConfig:
     L: float = 150.0      # distância entre os sensores (barra a–b)
     R: float = 60.0       # raio do cilindro/esfera medido
     saved: bool = False   # False = valores de exemplo (ainda não salvos pelo usuário)
-    # Eixos da PLACA (referencial do IMU) usados só para DESENHAR a esfera na página 1:
-    bar_axis: str = "+X"      # sentido do sensor 1 (esquerda) para o sensor 2 (direita)
-    toward_axis: str = "+Y"   # sentido da barra para o cilindro (para onde os sensores olham)
     # Calibração do ToF: valor somado às DUAS leituras (h1 e h2), na mesma unidade delas.
     # É calculado por solve_offset() a partir de uma altura H conhecida.
     tof_offset: float = 0.0
@@ -94,9 +82,6 @@ def load_config() -> GeometryConfig:
         with open(path, encoding="utf-8") as f:
             d = json.load(f)
         cfg = GeometryConfig(L=float(d["L"]), R=float(d["R"]), saved=True)
-        ba, ta = d.get("bar_axis", cfg.bar_axis), d.get("toward_axis", cfg.toward_axis)
-        if axes_ok(ba, ta):
-            cfg.bar_axis, cfg.toward_axis = ba, ta
         off = float(d.get("tof_offset", 0.0))
         cfg.tof_offset = off if math.isfinite(off) else 0.0
         return cfg
@@ -107,8 +92,7 @@ def load_config() -> GeometryConfig:
 def save_config(cfg: GeometryConfig) -> str:
     path = config_path()
     with open(path, "w", encoding="utf-8") as f:
-        json.dump({"L": cfg.L, "R": cfg.R, "bar_axis": cfg.bar_axis,
-                   "toward_axis": cfg.toward_axis, "tof_offset": cfg.tof_offset}, f, indent=2)
+        json.dump({"L": cfg.L, "R": cfg.R, "tof_offset": cfg.tof_offset}, f, indent=2)
     return path
 
 

@@ -20,8 +20,6 @@ import quaternion as Q
 
 from . import theme
 
-_C_H1 = theme.SERIES[0]     # sensor 1 (esquerda)
-_C_H2 = theme.SERIES[2]     # sensor 2 (direita)
 
 
 # ---------------------------------------------------------------- gráfico
@@ -74,6 +72,9 @@ def chart_commands(w, h, title, labels, colors, t, ys, window_s, lo, hi, wrap=No
 
 # ------------------------------------------------------------ orientação
 _HALF = np.array([1.0, 0.65, 0.12])   # meia-dimensão da "placa" (X, Y, Z do sensor)
+BOARD_S = 0.42                        # tamanho da placa na cena
+DOME_R = 2.0                          # raio do hemisfério (unidades da cena)
+_FOCUS = np.array([0.0, 0.0, 0.8])    # ponto para onde a câmera olha
 _FACE_RGB = {  # (eixo, sinal) -> cor base
     (0, 1): (230, 80, 80), (0, -1): (135, 45, 45),
     (1, 1): (80, 200, 110), (1, -1): (45, 118, 65),
@@ -90,7 +91,7 @@ def _faces():
             for sb, sc in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
                 v = np.zeros(3)
                 v[a], v[b], v[c] = s * _HALF[a], sb * _HALF[b], sc * _HALF[c]
-                corners.append(v)
+                corners.append(v * BOARD_S)
             n = np.zeros(3)
             n[a] = s
             faces.append((np.array(corners), n, np.array(_FACE_RGB[(a, s)], float)))
@@ -107,221 +108,167 @@ def _hex(rgb):
 
 
 @dataclass
-class SphereInfo:
-    """O que a cena 3D precisa para desenhar a esfera medida pelos ToF (dados puros)."""
+class ToFInfo:
+    """Leitura dos ToF para o texto H / α da cena (dados puros)."""
     res: object = None            # geometry.GeometryResult válido, ou None
-    L: float = 150.0              # distância entre sensores
-    R: float = 60.0               # raio da esfera
-    bar_axis: str = "+X"          # eixo da placa: de S1 (esquerda) para S2 (direita)
-    toward_axis: str = "+Y"       # eixo da placa: da barra para a esfera
     message: str = ""             # por que não há resultado
 
 
-_AXIS_INDEX = {"X": 0, "Y": 1, "Z": 2}
+def tilt_deg(R) -> float:
+    """Inclinação: ângulo entre o eixo Z da placa e a vertical (0 = deitada, sem singularidade)."""
+    return float(np.degrees(np.arccos(np.clip(R[2, 2], -1.0, 1.0))))
 
 
-def _axis(name):
-    """'+X', '-Y', ... -> (vetor unitário, índice do eixo)."""
-    sign = -1.0 if name.startswith("-") else 1.0
-    i = _AXIS_INDEX[name.strip("+-").upper()]
-    v = np.zeros(3)
-    v[i] = sign
-    return v, i
-
-
-def _sphere_layout(info):
+def sensor_pose(R, position_on: bool):
     """
-    Pontos da medição no referencial da PLACA, ou None (sem resultado válido ou eixos iguais).
-    A barra (L) ocupa o lado maior da placa (2 unidades) e fica na borda do lado dos sensores;
-    z (em direção à esfera) sai dessa borda.
+    (centro, matriz de rotação) da placa na cena.
+
+    Desligado: a placa fica no polo do hemisfério com a orientação real R.
+    Ligado: a placa vai para o meridiano de origem (plano X–Z, lado +X) à distância
+    angular do polo igual à inclinação, e fica TANGENTE à superfície (eixo Z da placa =
+    normal da esfera); só o giro em torno da normal (yaw) vem da orientação real.
     """
-    if info.res is None:
-        return None
-    bar, ib = _axis(info.bar_axis)
-    tw, it = _axis(info.toward_axis)
-    if ib == it:
-        return None
-    k = 2 * _HALF[0] / info.L
-    t0 = _HALF[it]
-
-    def B(x, z):
-        return bar * ((x - info.L / 2) * k) + tw * (z * k + t0)
-
-    res = info.res
-    return dict(k=k, bar=bar, tw=tw, B=B, a=B(0, 0), b=B(info.L, 0), c=B(*res.c), d=B(*res.d),
-                h=B(*res.h), foot=B(res.h[0], 0), center=B(*res.center), r=info.R * k)
+    lift = DOME_R + 0.6 * _HALF[2] * BOARD_S * 2
+    if not position_on:
+        return np.array([0.0, 0.0, lift]), R
+    th = np.radians(min(tilt_deg(R), 90.0))
+    n = np.array([np.sin(th), 0.0, np.cos(th)])
+    x = R[:, 0] - (R[:, 0] @ n) * n          # eixo X da placa projetado no plano tangente
+    if np.linalg.norm(x) < 1e-3:
+        x = R[:, 1] - (R[:, 1] @ n) * n
+    x /= np.linalg.norm(x)
+    return n * lift, np.column_stack((x, np.cross(n, x), n))
 
 
-def _sphere_cmds(proj, Cw, r, cdir, s):
-    """Esfera: disco sombreado + paralelos e meridianos (só a metade voltada para a câmera)."""
-    px, py = proj(Cw)[0]
-    cmds = [("oval", px, py, r * s, "#1b2437", "#4a5a80")]
+def _hull(P):
+    """Envoltória convexa 2D (cadeia monótona)."""
+    pts = sorted(map(tuple, np.round(P, 3)))
 
-    def ring(points):
-        vis = ((points - Cw) / r) @ cdir > 0.02
+    def half(seq):
+        h = []
+        for p in seq:
+            while len(h) >= 2 and ((h[-1][0] - h[-2][0]) * (p[1] - h[-2][1])
+                                   - (h[-1][1] - h[-2][1]) * (p[0] - h[-2][0])) <= 0:
+                h.pop()
+            h.append(p)
+        return h[:-1]
+
+    return half(pts) + half(pts[::-1])
+
+
+def _board_cmds(proj, center, Rb, cdir):
+    cmds, items = [], []
+    for corners, n, rgb in _FACES:
+        nn = Rb @ n
+        if nn @ cdir <= 0:
+            continue
+        P = corners @ Rb.T + center
+        shade = 0.55 + 0.45 * max(0.0, nn @ _LIGHT)
+        items.append((P.mean(axis=0) @ cdir, proj(P).ravel().tolist(), _hex(rgb * shade)))
+    for _, pts, col in sorted(items, key=lambda it: it[0]):
+        cmds.append(("poly", pts, col, "#0d0f13"))
+    for i, (name, color, L) in enumerate((("X", "#ff6b6b", 0.95), ("Y", "#4ecb71", 0.8),
+                                           ("Z", "#6fa3ff", 0.65))):
+        tip = center + Rb[:, i] * L
+        p0, p1, p2 = proj(np.array([center, tip, center + Rb[:, i] * L * 1.15]))
+        cmds.append(("line", [*p0, *p1], color, 2, True, None))
+        cmds.append(("text", p2[0], p2[1], name, color, "center", 10, True))
+    return cmds
+
+
+def _dome_cmds(proj, cdir):
+    """Hemisfério fixo: silhueta preenchida, paralelos/meridianos e o meridiano de origem."""
+    ang = np.linspace(0, 2 * np.pi, 97)
+    lat = np.radians(np.linspace(0, 90, 19))
+    surf = np.vstack([DOME_R * np.column_stack((np.cos(a) * np.cos(ang), np.cos(a) * np.sin(ang),
+                                                np.full_like(ang, np.sin(a)))) for a in lat])
+    cmds = [("poly", np.array(_hull(proj(surf))).ravel().tolist(), "#1b2437", "#4a5a80")]
+    back, front = [], []
+
+    def line(points, col_front, col_back, width=1):
+        vis = (points / DOME_R) @ cdir > 0.02
         pts = proj(points)
-        run = []
-        for ok, p in zip(vis, pts):
-            if ok:
-                run.append(p)
-                continue
-            if len(run) >= 2:
-                cmds.append(("line", np.array(run).ravel().tolist(), "#34425f", 1, False, None))
-            run = []
-        if len(run) >= 2:
-            cmds.append(("line", np.array(run).ravel().tolist(), "#34425f", 1, False, None))
+        n, i = len(pts), 0
+        while i < n - 1:
+            j = i
+            while j + 1 < n and vis[j + 1] == vis[i]:
+                j += 1
+            seg = pts[i:min(j + 1, n - 1) + 1]          # inclui o ponto seguinte: sem buracos
+            if len(seg) >= 2:
+                (front if vis[i] else back).append(
+                    ("line", seg.ravel().tolist(), col_front if vis[i] else col_back, width, False, None))
+            i = j + 1
 
-    th = np.linspace(0, 2 * np.pi, 73)
-    for lat in np.radians((-50, 0, 50)):
-        ring(Cw + r * np.column_stack((np.cos(lat) * np.cos(th), np.cos(lat) * np.sin(th),
-                                       np.full_like(th, np.sin(lat)))))
-    for lon in np.radians((0, 45, 90, 135)):
-        ring(Cw + r * np.column_stack((np.cos(lon) * np.cos(th), np.sin(lon) * np.cos(th), np.sin(th))))
-    return cmds
-
-
-def _sphere_annotations(proj, Rm, lay, info, h):
-    """Raios, barra, ponto h, H, tangente e alpha — por cima da placa e da esfera."""
-    import math
-
-    cmds = []
-    if lay is None:
-        same = info.bar_axis.strip("+-").upper() == info.toward_axis.strip("+-").upper()
-        msg = ("eixo da barra = eixo para a esfera (ajuste na página 3)" if same
-               else (info.message or "aguardando leitura dos ToF…"))
-        cmds.append(("text", 10, 10, "esfera: " + msg, theme.WARN, "nw", 9, True))
-        return cmds
-
-    res = info.res
-    W = lambda v: Rm @ v                      # placa -> mundo
-
-    def seg(p, q_, color, width=2, arrow=False, dash=None):
-        cmds.append(("line", [*proj(W(p))[0], *proj(W(q_))[0]], color, width, arrow, dash))
-
-    def dot(p, rad, fill):
-        x, y = proj(W(p))[0]
-        cmds.append(("oval", x, y, rad, fill, "#0d0f13"))
-
-    def text(p, t, color, anchor="center", size=10, bold=True, dx=0, dy=0):
-        """Texto com fundo escuro (fica legível sobre a placa e os eixos). anchor: 'w' ou 'center'."""
-        x, y = proj(W(p))[0]
-        x, y = x + dx, y + dy
-        wd, ht = 0.85 * size * len(t) + 8, 1.9 * size
-        x0 = x - 3 if anchor == "w" else x - wd / 2
-        cmds.append(("poly", [x0, y - ht / 2, x0 + wd, y - ht / 2, x0 + wd, y + ht / 2, x0, y + ht / 2],
-                     "#0d0f13", "#2e323d"))
-        cmds.append(("text", x, y, t, color, anchor, size, bold))
-
-    # raios dos ToF até a esfera, corda e barra
-    seg(lay["a"], lay["c"], _C_H1, 2)
-    seg(lay["b"], lay["d"], _C_H2, 2)
-    seg(lay["c"], lay["d"], theme.WARN, 1.5)
-    seg(lay["a"], lay["b"], "#f2f4f8", 4)
-    for p, col in ((lay["a"], _C_H1), (lay["b"], _C_H2)):
-        dot(p, 6, col)
-    dot(lay["c"], 4, _C_H1)
-    dot(lay["d"], 4, _C_H2)
-
-    # H: da barra (perpendicular) até o ponto h da esfera
-    seg(lay["foot"], lay["h"], theme.GOOD, 2.5, True, (6, 3))
-    dot(lay["h"], 7, theme.GOOD)
-    text((lay["foot"] + lay["h"]) / 2, f"H = {res.H:.1f}", theme.GOOD, "w", 10, True, dx=10)
-
-    # tangente em h (paralela à corda) e paralela à barra, com o arco de alpha
-    al = math.radians(res.alpha_deg)
-    k, bar, tw = lay["k"], lay["bar"], lay["tw"]
-    tl = 0.32 * info.L * k
-    tdir = bar * math.cos(al) + tw * math.sin(al)
-    seg(lay["h"] - tdir * tl, lay["h"] + tdir * tl, theme.GOOD, 2)
-    seg(lay["h"] - bar * tl, lay["h"] + bar * tl, theme.MUTED, 1, False, (4, 4))
-    if abs(res.alpha_deg) > 0.3:
-        rad = 0.16 * info.L * k
-        n = 14
-        arc = []
-        for i in range(n + 1):
-            t = al * i / n
-            arc += list(proj(W(lay["h"] + rad * (bar * math.cos(t) + tw * math.sin(t))))[0])
-        cmds.append(("line", arc, theme.GOOD, 1.5, False, None))
-        text(lay["h"] + 1.35 * rad * (bar * math.cos(al / 2) + tw * math.sin(al / 2)),
-             "α", theme.GOOD, "center", 11, True)
-
-    # leitura grande no canto
-    cmds.append(("text", 10, 10, f"H = {res.H:.1f}", theme.GOOD, "nw", 15, True))
-    cmds.append(("text", 10, 34, f"α = {res.alpha_deg:+.1f}°", theme.GOOD, "nw", 15, True))
-    cmds.append(("text", 10, 60, f"esfera R = {info.R:g}", theme.MUTED, "nw", 9, False))
-    if res.warning:
-        cmds.append(("text", 10, 76, res.warning, theme.WARN, "nw", 9, True))
-    cmds.append(("text", 8, h - 24,
-                 "posição absoluta ainda não implementada: a esfera é posicionada em relação à placa",
-                 theme.MUTED, "sw", 8, False))
-    return cmds
+    for la in (30, 60):
+        a = np.radians(la)
+        line(DOME_R * np.column_stack((np.cos(a) * np.cos(ang), np.cos(a) * np.sin(ang),
+                                       np.full_like(ang, np.sin(a)))), "#34425f", "#232c40")
+    line(DOME_R * np.column_stack((np.cos(ang), np.sin(ang), np.zeros_like(ang))),
+         "#5a6c96", "#2c3650", 2)
+    th = np.radians(np.linspace(0, 90, 31))
+    for lon in np.radians(np.arange(30, 360, 30)):
+        line(DOME_R * np.column_stack((np.sin(th) * np.cos(lon), np.sin(th) * np.sin(lon), np.cos(th))),
+             "#34425f", "#232c40")
+    # meridiano de origem (lon 0, lado +X): é por onde o sensor anda
+    line(DOME_R * np.column_stack((np.sin(th), np.zeros_like(th), np.cos(th))),
+         theme.WARN, "#6b5a2a", 3)
+    for deg in (0, 30, 60, 90):
+        a = np.radians(deg)
+        n = np.array([np.sin(a), 0.0, np.cos(a)])
+        if n @ cdir > -0.1:
+            x, y = proj(n * (DOME_R + 0.28))[0]
+            front.append(("text", x, y, f"{deg}°", theme.WARN, "center", 8, True))
+    return cmds, back, front
 
 
-def scene_commands(w, h, q, az, el, sphere=None):
+def scene_commands(w, h, q, az, el, tof=None, position_on=False):
     """
-    Placa 3D com a orientação q (sensor -> navegação, Z para cima). Se `sphere`
-    (SphereInfo) vier, desenha na mesma cena a esfera medida pelos ToF, a altura H
-    e o ângulo alpha.
+    Hemisfério fixo no centro com o sensor sobre ele. `position_on` liga o movimento
+    do sensor ao longo do meridiano de origem (ver sensor_pose). `tof` (ToFInfo) escreve
+    H e α no canto da cena.
     """
     cdir = np.array([np.cos(el) * np.cos(az), np.cos(el) * np.sin(az), np.sin(el)])
     fwd = -cdir
     right = np.cross(fwd, [0, 0, 1.0])
     right /= np.linalg.norm(right)
     cup = np.cross(right, fwd)
-
-    lay = _sphere_layout(sphere) if sphere is not None else None
-    ext = 1.9                                   # meia-largura (em unidades da cena) que cabe na tela
-    if lay is not None:
-        ext = max(ext, float(np.linalg.norm(lay["center"])) + lay["r"] + 0.3)
-    s = 0.27 * min(w, h) * 1.9 / ext
+    s = 0.27 * min(w, h) * 1.9 / 2.6
     cx, cy = w / 2, h / 2
 
     def proj(P):
-        P = np.atleast_2d(P)
+        P = np.atleast_2d(P) - _FOCUS
         return np.column_stack((cx + (P @ right) * s, cy - (P @ cup) * s))
 
-    cmds = []
+    R = Q.to_matrix(q) if q is not None else np.eye(3)
+    center, Rb = sensor_pose(R, position_on)
+    tilt = tilt_deg(R)
 
-    # chão (referencial de navegação): grade + marca do norte (+X)
-    z0 = -1.05
-    for v in np.arange(-1.6, 1.61, 0.4):
-        for a, b in (((-1.6, v, z0), (1.6, v, z0)), ((v, -1.6, z0), (v, 1.6, z0))):
-            cmds.append(("line", proj(np.array([a, b])).ravel().tolist(),
-                         theme.GRID, 1, False, None))
-    n0, n1, nt = proj(np.array([(1.6, 0, z0), (2.1, 0, z0), (2.35, 0, z0)]))
+    dome, back, front = _dome_cmds(proj, cdir)
+    board = _board_cmds(proj, center, Rb, cdir)
+    in_front = center @ cdir >= 0
+    cmds = dome + back + ([] if in_front else board) + front + (board if in_front else [])
+
+    # norte (+X) na borda da base
+    n0, n1, nt = proj(np.array([(DOME_R + 0.55, 0, 0), (DOME_R + 1.0, 0, 0), (DOME_R + 1.25, 0, 0)]))
     cmds.append(("line", [*n0, *n1], theme.WARN, 2, True, None))
     cmds.append(("text", nt[0], nt[1], "N (+X)", theme.WARN, "center", 9, True))
 
-    # placa (e esfera, na ordem certa de profundidade)
-    R = Q.to_matrix(q) if q is not None else np.eye(3)
-    items = []
-    for corners, n, rgb in _FACES:
-        nn = R @ n
-        if nn @ cdir <= 0:
-            continue
-        P = corners @ R.T
-        shade = 0.55 + 0.45 * max(0.0, nn @ _LIGHT)
-        items.append((P.mean(axis=0) @ cdir, "poly", proj(P), _hex(rgb * shade)))
-    if lay is not None:
-        Cw = R @ lay["center"]
-        items.append((float(Cw @ cdir), "sphere", Cw, None))
-    items.sort(key=lambda it: it[0])
-    for _, kind, a, b in items:
-        if kind == "poly":
-            cmds.append(("poly", a.ravel().tolist(), b, "#0d0f13"))
-        else:
-            cmds += _sphere_cmds(proj, a, lay["r"], cdir, s)
+    # leitura dos ToF
+    res = tof.res if tof is not None else None
+    if res is not None:
+        cmds.append(("text", 10, 10, f"H = {res.H:.1f}", theme.GOOD, "nw", 15, True))
+        cmds.append(("text", 10, 34, f"α = {res.alpha_deg:+.1f}°", theme.GOOD, "nw", 15, True))
+        if res.warning:
+            cmds.append(("text", 10, 60, res.warning, theme.WARN, "nw", 9, True))
+    else:
+        msg = (tof.message if tof is not None else "") or "aguardando leitura dos ToF…"
+        cmds.append(("text", 10, 10, "H, α: " + msg, theme.WARN, "nw", 9, True))
 
-    # eixos do sensor
-    for i, (name, color, L) in enumerate((("X", "#ff6b6b", 1.7), ("Y", "#4ecb71", 1.35),
-                                           ("Z", "#6fa3ff", 1.1))):
-        tip = R[:, i] * L
-        p0, p1, p2 = proj(np.array([(0, 0, 0), tip, tip * 1.12]))
-        cmds.append(("line", [*p0, *p1], color, 3, True, None))
-        cmds.append(("text", p2[0], p2[1], name, color, "center", 11, True))
-
-    if sphere is not None:
-        cmds += _sphere_annotations(proj, R, lay, sphere, h)
-
+    if position_on:
+        foot = (f"posição ligada · inclinação {min(tilt, 90):.0f}° · "
+                f"altura {100 * np.cos(np.radians(min(tilt, 90))):.0f}% do raio")
+    else:
+        foot = "posição desligada: placa fixa no topo, com a orientação real"
+    cmds.append(("text", 8, h - 22, foot, theme.MUTED, "sw", 8, False))
     cmds.append(("text", 8, h - 8, "arraste para girar a câmera", theme.MUTED, "sw", 8, False))
     return cmds

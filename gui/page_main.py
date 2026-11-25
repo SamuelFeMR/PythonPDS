@@ -1,5 +1,5 @@
-"""gui/page_main.py — tela única: linha de dados brutos no topo, cena 3D (placa + esfera
-com H e α), painel de ações e gráficos."""
+"""gui/page_main.py — tela única: linha de dados brutos no topo, cena 3D (hemisfério com o
+sensor, H e α), painel de ações e gráficos."""
 
 import os
 import time
@@ -8,7 +8,7 @@ from tkinter import ttk
 
 from . import theme
 from .dialog_geometry import GeometryDialog
-from .render import SphereInfo
+from .render import ToFInfo
 from .widgets import OrientationView, StripChart
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -66,44 +66,57 @@ class MainPage(ttk.Frame):
         side.grid(row=1, column=1, sticky="ns", padx=(4, 8), pady=(8, 4))
         side.columnconfigure(0, weight=1, uniform="s")
         side.columnconfigure(1, weight=1, uniform="s")
+        r = [0]   # próxima linha da grade
 
-        def header(text, row):
+        def nxt():
+            r[0] += 1
+            return r[0] - 1
+
+        def header(text):
             ttk.Label(side, text=text, style="H.TLabel").grid(
-                row=row, column=0, columnspan=2, sticky="w", pady=(10 if row else 0, 2))
+                row=nxt(), column=0, columnspan=2, sticky="w", pady=(10 if r[0] else 0, 2))
 
-        header("POSE", 0)
+        header("POSE")
         self.vars = {}
+        row = nxt()
         for i, key in enumerate(("roll", "pitch", "yaw", "tilt")):
             v = tk.StringVar(value=f"{key:<5} —")
             ttk.Label(side, textvariable=v, style="Mono.TLabel").grid(
-                row=1 + i // 2, column=i % 2, sticky="w")
+                row=row + i // 2, column=i % 2, sticky="w")
             self.vars[key] = v
+        nxt()
+        self.pos_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(side, text="Posição do sensor RGB na esfera", variable=self.pos_var
+                        ).grid(row=nxt(), column=0, columnspan=2, sticky="w", pady=(6, 0))
 
-        header("CALIBRAÇÃO", 3)
+        header("CALIBRAÇÃO")
         ttk.Button(side, text="Giroscópio (sensor PARADO)",
                    command=lambda: self.pipeline.start_gyro_calibration(200)
-                   ).grid(row=4, column=0, columnspan=2, sticky="we")
+                   ).grid(row=nxt(), column=0, columnspan=2, sticky="we")
+        row = nxt()
         ttk.Label(side, text="ToF: H conhecida (mm)", style="Panel.TLabel").grid(
-            row=5, column=0, sticky="w", pady=(8, 0))
+            row=row, column=0, sticky="w", pady=(8, 0))
         self.H_var = tk.StringVar()
         ttk.Entry(side, textvariable=self.H_var, width=8, justify="right").grid(
-            row=5, column=1, sticky="e", pady=(8, 0))
+            row=row, column=1, sticky="e", pady=(8, 0))
+        row = nxt()
         ttk.Button(side, text="Calibrar ToF", command=self._calibrate_tof).grid(
-            row=6, column=0, sticky="we", pady=(4, 0), padx=(0, 3))
+            row=row, column=0, sticky="we", pady=(4, 0), padx=(0, 3))
         ttk.Button(side, text="Limpar", command=self._clear_tof).grid(
-            row=6, column=1, sticky="we", pady=(4, 0), padx=(3, 0))
+            row=row, column=1, sticky="we", pady=(4, 0), padx=(3, 0))
         self.cal_label = ttk.Label(side, text="", style="Muted.TLabel", wraplength=250, justify="left")
-        self.cal_label.grid(row=7, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self.cal_label.grid(row=nxt(), column=0, columnspan=2, sticky="w", pady=(4, 0))
 
-        header("AÇÕES", 8)
+        header("AÇÕES")
+        row = nxt()
         ttk.Button(side, text="Reiniciar orientação", command=self._reset
-                   ).grid(row=9, column=0, sticky="we", padx=(0, 3))
+                   ).grid(row=row, column=0, sticky="we", padx=(0, 3))
         ttk.Button(side, text="Geometria…", command=self._open_geometry
-                   ).grid(row=9, column=1, sticky="we", padx=(3, 0))
+                   ).grid(row=row, column=1, sticky="we", padx=(3, 0))
         self.rec_btn = ttk.Button(side, text="● Gravar CSV", command=self._toggle_rec)
-        self.rec_btn.grid(row=10, column=0, columnspan=2, sticky="we", pady=(4, 0))
+        self.rec_btn.grid(row=nxt(), column=0, columnspan=2, sticky="we", pady=(4, 0))
         self.info = ttk.Label(side, text="", style="Muted.TLabel", wraplength=250, justify="left")
-        self.info.grid(row=11, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.info.grid(row=nxt(), column=0, columnspan=2, sticky="w", pady=(8, 0))
         self._update_info()
 
     # ------------------------------------------------------------- ações
@@ -149,21 +162,19 @@ class MainPage(ttk.Frame):
                                              else "não encontrado (rode check_axes.py)"))
         self.info.configure(text="\n".join(lines))
 
-    # ------------------------------------------------------- esfera / H / α
-    def _sphere_info(self):
-        cfg = self.pipeline.geometry_cfg
+    # --------------------------------------------------------------- H / α
+    def _tof_info(self):
         g = self.store.latest_geom
-        res, msg = None, "aguardando leitura dos ToF…"
-        if g is not None:
-            res, msg = (g.result, "") if g.valid else (None, g.reason)
-        return SphereInfo(res, cfg.L, cfg.R, cfg.bar_axis, cfg.toward_axis, msg)
+        if g is None:
+            return ToFInfo(None, "aguardando leitura dos ToF…")
+        return ToFInfo(g.result, "") if g.valid else ToFInfo(None, g.reason)
 
     # ------------------------------------------------------------ refresh
     def refresh(self):
         self.raw_var.set(raw_line(self.store.latest_sample))
 
         pose = self.store.latest_pose
-        self.view.draw(pose.q if pose else None, self._sphere_info())
+        self.view.draw(pose.q if pose else None, self._tof_info(), self.pos_var.get())
 
         gyro_txt = self.pipeline.calibration_text()
         tof_txt = self._cal_msg or self.pipeline.tof_calibration_text()
