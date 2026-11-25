@@ -8,6 +8,7 @@ Fontes de linhas CSV. Todas têm:
     label
 """
 
+import colorsys
 import time
 
 import numpy as np
@@ -103,9 +104,9 @@ class DemoSource:
         g = np.degrees(w + self.bias) + self.rng.normal(0, 0.2, 3)
         m = Q.rotate_inverse(self.q, self.b_nav) + self.rng.normal(0, 1.5, 3)
         d1, d2 = self._tof(t)
-        r = int(1300 + 150 * np.sin(0.3 * t))
-        gr = int(1100 + 120 * np.sin(0.4 * t + 1))
-        b = int(1200 + 100 * np.sin(0.5 * t + 2))
+        # cor da esfera (gomos_r9.py): matiz = longitude/360, que aqui varre devagar
+        r, gr, b = (int(1200 * c + self.rng.normal(0, 8))
+                    for c in colorsys.hsv_to_rgb((25.0 * t % 360.0) / 360.0, 1.0, 1.0))
 
         line = (f"{int(self.k * self.dt * 1e6)},"
                 f"{a[0]:.4f},{a[1]:.4f},{a[2]:.4f},"
@@ -119,7 +120,7 @@ class DemoSource:
         """h1 (esquerda) e h2 (direita) de um cilindro que se desloca de lado e se afasta/aproxima."""
         L, R = self.geo_L, self.geo_R
         ox = L / 2 + 0.45 * R * np.sin(0.5 * t)                     # deslocamento lateral
-        oz = 0.55 * L + 0.12 * L * np.sin(0.31 * t + 1.0)           # distância ao cilindro
+        oz = R + 0.5 * L + 0.1 * L * np.sin(0.31 * t + 1.0)         # distância ao cilindro
         O = np.array([ox, oz])
         self.truth_center = O
 

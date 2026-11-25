@@ -19,6 +19,7 @@ import numpy as np
 import filter_config
 import geometry
 import position
+import sphere_color
 import quaternion as Q
 from filters import FilterInput, make_filter
 from sample import Sample
@@ -96,7 +97,9 @@ class Pipeline:
         self.filter_name = ""
         self.filter = None
         self.filter_message = ""
-        self.reload_filter_config()
+        self.color_cfg = sphere_color.ColorConfig()
+        self._lon_hold = None      # última longitude lida pela cor
+        self.reload_configs()
 
         self.gyro_bias = np.zeros(3)
         self._calib_target = 0
@@ -137,14 +140,15 @@ class Pipeline:
             self.gyro_bias[:] = 0.0   # o bias estava no referencial anterior
 
     # ------------------------------------------------------------- filtro
-    def reload_filter_config(self):
-        """(Re)lê filter_config.json e recria o filtro com esses parâmetros."""
+    def reload_configs(self):
+        """(Re)lê filter_config.json (recria o filtro) e sphere_config.json (cor da esfera)."""
         cfg = filter_config.load()
         with self.lock:
+            self.color_cfg = sphere_color.load()
             self.filter_name = cfg.filter
             self.filter = make_filter(cfg.filter, **cfg.params)
             self.use_mag = cfg.use_mag
-            self.filter_message = cfg.message
+            self.filter_message = "; ".join(m for m in (cfg.message, self.color_cfg.message) if m)
             self._prev_t_us = None
 
     # ------------------------------------------------------- calibração
@@ -171,6 +175,7 @@ class Pipeline:
             self._geo_t0_us = None
             self._tof_win.clear()
             self._tof_cal = None
+            self._lon_hold = None
 
     # ------------------------------------------------- sensores de distância
     def set_geometry(self, L: float, R: float, save: bool = True,
@@ -218,12 +223,26 @@ class Pipeline:
         return GeometryState(t, h1, h2, r.valid, r.reason, r)
 
     # ------------------------------------------------- posição na esfera
-    def process_position(self, pose: PoseState, geom: Optional[GeometryState]) -> position.Position:
-        """Cruza a orientação (pose) com o ângulo de ataque α (geom), da MESMA amostra."""
+    def process_position(self, pose: PoseState, geom: Optional[GeometryState],
+                         s: Optional[Sample] = None) -> position.Position:
+        """Orientação (pose) × α (geom) dão a distância ao polo; a cor (s) dá a longitude.
+        Tudo da MESMA amostra."""
         with self.lock:
-            cfg = self.geometry_cfg
+            cfg, ccfg = self.geometry_cfg, self.color_cfg
         alpha = geom.alpha_deg if geom is not None and geom.valid else None
-        return position.compute(pose.t_s, pose.q, alpha, cfg.bar_axis, cfg.toward_axis)
+        pos = position.compute(pose.t_s, pose.q, alpha, cfg.bar_axis, cfg.toward_axis)
+
+        lon = None
+        if s is not None and s.color_ok:
+            lon, _ = sphere_color.read_longitude(s.red, s.green, s.blue, ccfg)
+        # na calota vermelha do polo a longitude não existe: não atualiza
+        if lon is not None and pos.polar_deg >= sphere_color.pole_cap_deg(cfg.R, ccfg):
+            with self.lock:
+                self._lon_hold = lon
+            return position.with_longitude(pos, lon, "cor")
+        with self.lock:
+            hold = self._lon_hold
+        return position.with_longitude(pos, hold, "cor retida")
 
     # ------------------------------------------------- calibração do ToF
     def start_tof_calibration(self, H_known: float) -> str:

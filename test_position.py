@@ -16,6 +16,7 @@ import numpy as np
 
 import geometry as G
 import position as P
+import sphere_color as C
 import quaternion as Q
 import test_geometry as T
 
@@ -82,6 +83,33 @@ def main():
     # sensores para cima (placa de cabeça para baixo): abaixo do equador, trava nele
     p = P.compute(0, np.array([0.0, 1, 0, 0]), 0.0)
     assert p.clamped and abs(p.polar_deg - 90) < 1e-9
+
+    # --- cor -> longitude (convenção do gomos_r9.py: matiz = lon/360, S = V = 1)
+    import colorsys
+    cfg = C.ColorConfig()
+    worst_lon = 0.0
+    for lon in range(0, 360, 3):
+        rgb = colorsys.hsv_to_rgb(C.longitude_to_hue(lon), 1.0, 1.0)
+        for scale in (80.0, 1300.0):                        # qualquer intensidade do sensor
+            got, why = C.read_longitude(*(scale * c for c in rgb), cfg)
+            assert got is not None, why
+            worst_lon = max(worst_lon, abs((got - lon + 180) % 360 - 180))
+    print(f"cor -> longitude: erro máx. {worst_lon:.2e}°")
+    assert worst_lon < 1e-6
+    assert C.read_longitude(10, 5, 5, cfg)[0] is None                 # sem sinal
+    assert C.read_longitude(1000, 950, 900, cfg)[0] is None           # pouco saturada
+    off = C.ColorConfig(hue_offset_deg=10.0, rgb_gain=(1.0, 2.0, 1.0))
+    # (1000, 250, 0) com ganho 2 no G = (1000, 500, 0): matiz 30° -> longitude 30 + 10 de offset
+    assert abs(C.read_longitude(1000, 250, 0, off)[0] - 40.0) < 1e-9
+    assert abs(C.pole_cap_deg(90.0, cfg) - math.degrees(5 / 90.0)) < 1e-9  # 1 cm de calota em R = 9 cm
+
+    # --- polo (orientação × α) + longitude (cor)
+    p0 = P.compute(0, np.array([math.cos(math.radians(15)), 0, math.sin(math.radians(15)), 0]), 0.0)
+    p1 = P.with_longitude(p0, 120.0, "cor")
+    assert abs(p1.polar_deg - 30) < 1e-9 and abs(p1.azimuth_deg - 120) < 1e-9
+    n = p1.normal
+    assert abs(math.degrees(math.acos(n[2])) - 30) < 1e-9 and abs(math.degrees(math.atan2(n[1], n[0])) - 120) < 1e-9
+    assert P.with_longitude(p0, None, "cor") is p0
     print("OK")
 
 

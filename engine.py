@@ -120,6 +120,6 @@ class Engine:
                     continue
                 if pose is not None:
                     self.store.add_pose(pose)
-                    self.store.add_position(self.pipeline.process_position(pose, geom))
+                    self.store.add_position(self.pipeline.process_position(pose, geom, s))
         finally:
             source.close()

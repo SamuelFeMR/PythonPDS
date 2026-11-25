@@ -69,7 +69,7 @@ def axes_ok(bar_axis: str, toward_axis: str) -> bool:
 @dataclass
 class GeometryConfig:
     L: float = 150.0      # distância entre os sensores (barra a–b)
-    R: float = 60.0       # raio do cilindro/esfera medido
+    R: float = 90.0       # raio da esfera medida (mm); a do gomos_r9.py tem 9 cm
     saved: bool = False   # False = valores de exemplo (ainda não salvos pelo usuário)
     # Eixos da PLACA (referencial do IMU), para posicionar a medida no mundo:
     bar_axis: str = "+X"      # sentido do sensor 1 (esquerda) para o sensor 2 (direita)

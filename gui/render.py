@@ -12,6 +12,7 @@ Comandos:
     ("oval", x, y, raio, preenchimento, contorno)
 """
 
+import colorsys
 from dataclasses import dataclass
 
 import numpy as np
@@ -120,6 +121,29 @@ def sensor_center(position):
     return n * (DOME_R + 0.5)
 
 
+def _patches():
+    """Remendos do hemisfério (24 longitudes × 6 faixas), coloridos como os gomos do gomos_r9.py:
+    matiz = longitude/360. Calculados uma vez; a cada quadro só se escolhem os voltados à câmera."""
+    out = []
+    lons, pols = np.radians(np.arange(0, 361, 15)), np.radians(np.arange(0, 91, 15))
+
+    def pt(p, l):
+        return DOME_R * np.array([np.sin(p) * np.cos(l), np.sin(p) * np.sin(l), np.cos(p)])
+
+    for i in range(len(lons) - 1):
+        l0, l1 = lons[i], lons[i + 1]
+        rgb = np.array(colorsys.hsv_to_rgb(((l0 + l1) / 2) / (2 * np.pi), 1.0, 1.0)) * 255
+        for j in range(len(pols) - 1):
+            p0, p1 = pols[j], pols[j + 1]
+            P = np.array([pt(p0, l0), pt(p0, l1), pt(p1, l1), pt(p1, l0)])
+            c = pt((p0 + p1) / 2, (l0 + l1) / 2)
+            out.append((P, c / np.linalg.norm(c), rgb))
+    return out
+
+
+_PATCHES = _patches()
+
+
 def _hull(P):
     """Envoltória convexa 2D (cadeia monótona)."""
     pts = sorted(map(tuple, np.round(P, 3)))
@@ -163,7 +187,11 @@ def _dome_cmds(proj, cdir):
     surf = np.vstack([DOME_R * np.column_stack((np.cos(a) * np.cos(ang), np.cos(a) * np.sin(ang),
                                                 np.full_like(ang, np.sin(a)))) for a in lat])
     cmds = [("poly", np.array(_hull(proj(surf))).ravel().tolist(), "#1b2437", "#4a5a80")]
-    back, front = [], []
+    back, front, patches = [], [], []
+    for P, n, rgb in _PATCHES:     # gomos coloridos (só os voltados para a câmera)
+        if n @ cdir > 0.0:
+            col = _hex(rgb * (0.30 + 0.30 * max(0.0, n @ _LIGHT)))
+            patches.append(("poly", proj(P).ravel().tolist(), col, col))
 
     def line(points, col_front, col_back, width=1):
         vis = (points / DOME_R) @ cdir > 0.02
@@ -182,15 +210,15 @@ def _dome_cmds(proj, cdir):
     for la in (30, 60):
         a = np.radians(la)
         line(DOME_R * np.column_stack((np.cos(a) * np.cos(ang), np.cos(a) * np.sin(ang),
-                                       np.full_like(ang, np.sin(a)))), "#34425f", "#232c40")
+                                       np.full_like(ang, np.sin(a)))), "#10131a", "#232c40")
     line(DOME_R * np.column_stack((np.cos(ang), np.sin(ang), np.zeros_like(ang))),
-         "#5a6c96", "#2c3650", 2)
+         "#0d0f13", "#2c3650", 2)
     th = np.radians(np.linspace(0, 90, 31))
     for lon in np.radians(np.arange(30, 360, 30)):
         if abs(np.sin(lon)) < 1e-9:      # 0° e 180° (plano X–Z) são o meridiano de origem, abaixo
             continue
         line(DOME_R * np.column_stack((np.sin(th) * np.cos(lon), np.sin(th) * np.sin(lon), np.cos(th))),
-             "#34425f", "#232c40")
+             "#10131a", "#232c40")
     # meridiano de origem (plano X–Z): é por onde o ponto anda quando só o α muda
     ths = np.radians(np.linspace(-90, 90, 61))
     line(DOME_R * np.column_stack((np.sin(ths), np.zeros_like(ths), np.cos(ths))),
@@ -201,7 +229,7 @@ def _dome_cmds(proj, cdir):
         if n @ cdir > -0.1:
             x, y = proj(n * (DOME_R + 0.28))[0]
             front.append(("text", x, y, f"{deg}°", theme.WARN, "center", 8, True))
-    return cmds, back, front
+    return cmds, back, patches, front
 
 
 def scene_commands(w, h, q, az, el, tof=None, position=None):
@@ -226,10 +254,10 @@ def scene_commands(w, h, q, az, el, tof=None, position=None):
     center = sensor_center(position)
     res = tof.res if tof is not None else None
 
-    dome, back, front = _dome_cmds(proj, cdir)
+    dome, back, patches, front = _dome_cmds(proj, cdir)
     board = _board_cmds(proj, center, R, cdir)
     in_front = center @ cdir >= 0
-    cmds = dome + back + ([] if in_front else board) + front + (board if in_front else [])
+    cmds = dome + back + patches + ([] if in_front else board) + front + (board if in_front else [])
     if position is not None:    # ponto medido na superfície e o fio até a placa
         (x0, y0), (x1, y1) = proj(np.array([center, position.normal * DOME_R]))
         cmds.append(("line", [x0, y0, x1, y1], theme.GOOD, 1.5, False, (4, 3)))
@@ -252,6 +280,7 @@ def scene_commands(w, h, q, az, el, tof=None, position=None):
 
     if position is not None:
         foot = (f"posição ligada · α {position.alpha_deg:+.1f}° · a {position.polar_deg:.0f}° do polo · "
+                f"lon {position.azimuth_deg:.0f}° ({position.lon_source}) · "
                 f"altura {100 * position.height_ratio:.0f}% do raio")
         if position.alpha_assumed:
             foot += " · sem ToF válido: α = 0 assumido"

@@ -79,12 +79,12 @@ class MainPage(ttk.Frame):
         header("POSE")
         self.vars = {}
         row = nxt()
-        for i, key in enumerate(("roll", "pitch", "yaw", "tilt", "polo", "azim")):
+        for i, key in enumerate(("roll", "pitch", "yaw", "tilt", "polo", "lon")):
             v = tk.StringVar(value=f"{key:<5} —")
             ttk.Label(side, textvariable=v, style="Mono.TLabel").grid(
                 row=row + i // 2, column=i % 2, sticky="w")
             self.vars[key] = v
-        nxt(), nxt()   # 3 linhas: roll/pitch, yaw/tilt, polo/azim
+        nxt(), nxt()   # 3 linhas: roll/pitch, yaw/tilt, polo/lon
         self.pos_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(side, text="Posição do sensor RGB na esfera", variable=self.pos_var
                         ).grid(row=nxt(), column=0, columnspan=2, sticky="w", pady=(6, 0))
@@ -137,7 +137,7 @@ class MainPage(ttk.Frame):
 
     def _reset(self):
         """Reinicia a orientação e relê o filter_config.json."""
-        self.pipeline.reload_filter_config()
+        self.pipeline.reload_configs()
         self.pipeline.reset()
         self._update_info()
 
@@ -189,9 +189,10 @@ class MainPage(ttk.Frame):
             r, p, y = pose.euler_deg
             for key, val in (("roll", r), ("pitch", p), ("yaw", y), ("tilt", pose.tilt_deg)):
                 self.vars[key].set(f"{key:<5}{val:+7.1f}°")
-        if pos:   # ponto na esfera: orientação × α
+        if pos:   # ponto na esfera: polo = orientação × α, lon = cor da esfera
             self.vars["polo"].set(f"polo {pos.polar_deg:7.1f}°")
-            self.vars["azim"].set(f"azim {pos.azimuth_deg:+7.1f}°")
+            tag = {"cor": "cor", "cor retida": "ret", "imu": "imu"}[pos.lon_source]
+            self.vars["lon"].set(f"lon {pos.azimuth_deg:6.1f}° {tag}")
 
         t, d = self.store.snapshot_pose(WINDOW_S)
         self.chart.update_data(t, d[:, :4] if len(t) else d, WINDOW_S)

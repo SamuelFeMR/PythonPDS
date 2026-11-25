@@ -22,6 +22,11 @@ vertical (yaw) não muda onde o sensor está na esfera, só para onde a placa ap
 magnetômetro (que deriva); por isso ele é retirado (yaw=False o mantém). A esfera é só o
 hemisfério de cima: se a normal apontar para baixo do equador, trava no equador.
 
+LONGITUDE: orientação × α só dão a distância ao polo (polar); o azimute que sai deles vale só
+para o lado em que a placa está inclinada. A longitude de verdade vem da COR da esfera
+(sphere_color.py, gradiente do gomos_r9.py). with_longitude() junta as duas: polar da
+orientação × α, longitude da cor.
+
 Sem lógica de interface: testado por test_position.py.
 """
 
@@ -70,6 +75,7 @@ class Position:
     alpha_deg: float              # α usado
     alpha_assumed: bool = False   # True: sem ToF válido, usou α = 0
     clamped: bool = False         # True: estava abaixo do equador
+    lon_source: str = "imu"       # de onde veio o azimute: "cor", "cor retida" ou "imu"
 
     @property
     def height_ratio(self) -> float:
@@ -95,3 +101,13 @@ def compute(t_s: float, q, alpha_deg, bar_axis: str = DEFAULT_BAR,
     polar = math.degrees(math.acos(max(-1.0, min(1.0, n[2]))))
     azim = math.degrees(math.atan2(n[1], n[0])) if polar > 1e-6 else 0.0
     return Position(t_s, n, polar, azim, alpha, assumed, clamped)
+
+
+def with_longitude(pos: Position, lon_deg, source: str) -> Position:
+    """Troca o azimute pela longitude lida na COR (None = mantém o do IMU), sem mexer no polar."""
+    if lon_deg is None:
+        return pos
+    th, lam = math.radians(pos.polar_deg), math.radians(lon_deg)
+    n = np.array([math.sin(th) * math.cos(lam), math.sin(th) * math.sin(lam), math.cos(th)])
+    return Position(pos.t_s, n, pos.polar_deg, float(lon_deg) % 360.0, pos.alpha_deg,
+                    pos.alpha_assumed, pos.clamped, source)
