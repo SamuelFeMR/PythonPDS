@@ -83,12 +83,12 @@ class OrientationView(tk.Canvas):
         self.az -= dx * 0.01
         self.el = float(np.clip(self.el + dy * 0.01, -1.4, 1.4))
 
-    def draw(self, q):
+    def draw(self, q, sphere=None):
         w, h = self.winfo_width(), self.winfo_height()
         if w < 80 or h < 80:
             return
         self.delete("all")
-        run_commands(self, render.scene_commands(w, h, q, self.az, self.el))
+        run_commands(self, render.scene_commands(w, h, q, self.az, self.el, sphere))
 
 
 class GeometryView(tk.Canvas):

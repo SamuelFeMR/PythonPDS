@@ -9,6 +9,7 @@ from filters import FILTERS
 
 from . import theme
 from .page_base import Page
+from .render import SphereInfo
 from .widgets import OrientationView, StripChart
 
 WINDOW_S = 10
@@ -66,21 +67,26 @@ class PosePage(Page):
                    ).grid(row=8, column=0, sticky="we", pady=(4, 0))
         self._update_align_label()
 
-        ttk.Label(side, text="CALIBRAÇÃO", style="H.TLabel").grid(row=9, column=0, sticky="w", pady=(12, 0))
+        ttk.Label(side, text="VISTA 3D", style="H.TLabel").grid(row=9, column=0, sticky="w", pady=(12, 0))
+        self.sphere_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(side, text="Esfera, H e α (sensores ToF)", variable=self.sphere_var
+                        ).grid(row=10, column=0, sticky="w", pady=(4, 0))
+
+        ttk.Label(side, text="CALIBRAÇÃO", style="H.TLabel").grid(row=11, column=0, sticky="w", pady=(12, 0))
         ttk.Button(side, text="Calibrar giroscópio (sensor PARADO)",
                    command=lambda: self.pipeline.start_gyro_calibration(200)
-                   ).grid(row=10, column=0, sticky="we", pady=(4, 0))
+                   ).grid(row=12, column=0, sticky="we", pady=(4, 0))
         ttk.Button(side, text="Reiniciar orientação", command=self.pipeline.reset
-                   ).grid(row=11, column=0, sticky="we", pady=(4, 0))
+                   ).grid(row=13, column=0, sticky="we", pady=(4, 0))
         self.calib_label = ttk.Label(side, text="", style="Muted.TLabel", wraplength=250)
-        self.calib_label.grid(row=12, column=0, sticky="w", pady=(2, 0))
+        self.calib_label.grid(row=14, column=0, sticky="w", pady=(2, 0))
 
-        ttk.Label(side, text="POSE", style="H.TLabel").grid(row=13, column=0, sticky="w", pady=(12, 0))
+        ttk.Label(side, text="POSE", style="H.TLabel").grid(row=15, column=0, sticky="w", pady=(12, 0))
         self.vars = {}
         for i, (key, label) in enumerate((("roll", "roll"), ("pitch", "pitch"), ("yaw", "yaw"),
                                           ("tilt", "tilt"), ("q", "quat"), ("a", "|a|"))):
             row = ttk.Frame(side, style="Panel.TFrame")
-            row.grid(row=14 + i, column=0, sticky="we")
+            row.grid(row=16 + i, column=0, sticky="we")
             ttk.Label(row, text=label, style="Muted.TLabel", width=6).pack(side="left")
             v = tk.StringVar(value="—")
             ttk.Label(row, textvariable=v, style="Mono.TLabel").pack(side="right")
@@ -122,10 +128,22 @@ class PosePage(Page):
             self.align_label.configure(
                 text="não encontrado (rode check_axes.py)", foreground=theme.WARN)
 
+    # ------------------------------------------------------- esfera / H / α
+    def _sphere_info(self):
+        """Dados dos ToF para desenhar na própria cena 3D (None = esfera desligada)."""
+        if not self.sphere_var.get():
+            return None
+        cfg = self.pipeline.geometry_cfg
+        g = self.store.latest_geom
+        res, msg = None, "aguardando leitura dos ToF…"
+        if g is not None:
+            res, msg = (g.result, "") if g.valid else (None, g.reason)
+        return SphereInfo(res, cfg.L, cfg.R, cfg.bar_axis, cfg.toward_axis, msg)
+
     # ------------------------------------------------------------ refresh
     def refresh(self):
         pose = self.store.latest_pose
-        self.view.draw(pose.q if pose else None)
+        self.view.draw(pose.q if pose else None, self._sphere_info())
         self.calib_label.configure(text=self.pipeline.calibration_text())
 
         if pose:

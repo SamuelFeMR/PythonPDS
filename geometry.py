@@ -57,11 +57,23 @@ WARN_CHORD_RATIO = 0.95
 
 
 # ---------------------------------------------------------------- configuração
+AXES = ("+X", "-X", "+Y", "-Y", "+Z", "-Z")
+
+
+def axes_ok(bar_axis: str, toward_axis: str) -> bool:
+    """Os dois eixos precisam existir e ser de eixos DIFERENTES da placa."""
+    return (bar_axis in AXES and toward_axis in AXES
+            and bar_axis[-1] != toward_axis[-1])
+
+
 @dataclass
 class GeometryConfig:
     L: float = 150.0      # distância entre os sensores (barra a–b)
-    R: float = 60.0       # raio do cilindro medido
+    R: float = 60.0       # raio do cilindro/esfera medido
     saved: bool = False   # False = valores de exemplo (ainda não salvos pelo usuário)
+    # Eixos da PLACA (referencial do IMU) usados só para DESENHAR a esfera na página 1:
+    bar_axis: str = "+X"      # sentido do sensor 1 (esquerda) para o sensor 2 (direita)
+    toward_axis: str = "+Y"   # sentido da barra para o cilindro (para onde os sensores olham)
 
 
 def config_path():
@@ -78,15 +90,20 @@ def load_config() -> GeometryConfig:
     try:
         with open(path, encoding="utf-8") as f:
             d = json.load(f)
-        return GeometryConfig(L=float(d["L"]), R=float(d["R"]), saved=True)
-    except (OSError, ValueError, KeyError):
+        cfg = GeometryConfig(L=float(d["L"]), R=float(d["R"]), saved=True)
+        ba, ta = d.get("bar_axis", cfg.bar_axis), d.get("toward_axis", cfg.toward_axis)
+        if axes_ok(ba, ta):
+            cfg.bar_axis, cfg.toward_axis = ba, ta
+        return cfg
+    except (OSError, ValueError, KeyError, TypeError):
         return GeometryConfig()
 
 
 def save_config(cfg: GeometryConfig) -> str:
     path = config_path()
     with open(path, "w", encoding="utf-8") as f:
-        json.dump({"L": cfg.L, "R": cfg.R}, f, indent=2)
+        json.dump({"L": cfg.L, "R": cfg.R, "bar_axis": cfg.bar_axis,
+                   "toward_axis": cfg.toward_axis}, f, indent=2)
     return path
 
 

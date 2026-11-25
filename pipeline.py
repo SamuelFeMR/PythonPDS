@@ -162,12 +162,20 @@ class Pipeline:
             self._geo_t0_us = None
 
     # ------------------------------------------------- sensores de distância
-    def set_geometry(self, L: float, R: float, save: bool = True) -> str:
-        """Define L (distância entre sensores) e R (raio do cilindro), na unidade das leituras."""
+    def set_geometry(self, L: float, R: float, save: bool = True,
+                     bar_axis: Optional[str] = None, toward_axis: Optional[str] = None) -> str:
+        """Define L (distância entre sensores) e R (raio), na unidade das leituras, e
+        (opcional) os eixos da placa usados no desenho 3D. Sem eixos = mantém os atuais."""
         if not (L > 0 and R > 0):
             raise ValueError("L e R precisam ser positivos")
+        old = self.geometry_cfg
+        ba = bar_axis or old.bar_axis
+        ta = toward_axis or old.toward_axis
+        if not geometry.axes_ok(ba, ta):
+            raise ValueError("o eixo da barra e o eixo para o cilindro precisam ser de eixos diferentes")
         with self.lock:
-            self.geometry_cfg = geometry.GeometryConfig(L=float(L), R=float(R), saved=save)
+            self.geometry_cfg = geometry.GeometryConfig(
+                L=float(L), R=float(R), saved=save, bar_axis=ba, toward_axis=ta)
         return geometry.save_config(self.geometry_cfg) if save else ""
 
     def process_geometry(self, s: Sample) -> GeometryState:
