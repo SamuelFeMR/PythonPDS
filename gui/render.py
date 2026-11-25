@@ -18,6 +18,7 @@ from dataclasses import dataclass
 import numpy as np
 
 import quaternion as Q
+from position import axis_vector, scene_points
 
 from . import theme
 
@@ -72,10 +73,8 @@ def chart_commands(w, h, title, labels, colors, t, ys, window_s, lo, hi, wrap=No
 
 
 # ------------------------------------------------------------ orientação
-_HALF = np.array([1.0, 0.65, 0.12])   # meia-dimensão da "placa" (X, Y, Z do sensor)
-BOARD_S = 0.42                        # tamanho da placa na cena
 DOME_R = 2.0                          # raio do hemisfério (unidades da cena)
-_FOCUS = np.array([0.0, 0.0, 0.8])    # ponto para onde a câmera olha
+_FOCUS = np.array([0.0, 0.0, 1.6])    # ponto para onde a câmera olha
 _FACE_RGB = {  # (eixo, sinal) -> cor base
     (0, 1): (230, 80, 80), (0, -1): (135, 45, 45),
     (1, 1): (80, 200, 110), (1, -1): (45, 118, 65),
@@ -83,23 +82,23 @@ _FACE_RGB = {  # (eixo, sinal) -> cor base
 }
 
 
-def _faces():
+def _faces(half):
+    """Faces da placa (caixa de meia-dimensão `half`, nos eixos X, Y, Z da placa)."""
     faces = []
     for a in range(3):
         b, c = (a + 1) % 3, (a + 2) % 3
-        for s in (1, -1):
+        for sg in (1, -1):
             corners = []
             for sb, sc in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
                 v = np.zeros(3)
-                v[a], v[b], v[c] = s * _HALF[a], sb * _HALF[b], sc * _HALF[c]
-                corners.append(v * BOARD_S)
+                v[a], v[b], v[c] = sg * half[a], sb * half[b], sc * half[c]
+                corners.append(v)
             n = np.zeros(3)
-            n[a] = s
-            faces.append((np.array(corners), n, np.array(_FACE_RGB[(a, s)], float)))
+            n[a] = sg
+            faces.append((np.array(corners), n, np.array(_FACE_RGB[(a, sg)], float)))
     return faces
 
 
-_FACES = _faces()
 _LIGHT = np.array([0.4, -0.3, 0.85]) / np.linalg.norm([0.4, -0.3, 0.85])
 
 
@@ -110,15 +109,13 @@ def _hex(rgb):
 
 @dataclass
 class ToFInfo:
-    """Leitura dos ToF para escrever H e α na cena (dados puros)."""
+    """Leitura dos ToF e geometria da placa para desenhar a pose (dados puros)."""
     res: object = None            # geometry.GeometryResult válido, ou None
     message: str = ""             # por que não há resultado
-
-
-def sensor_center(position):
-    """Centro da placa na cena: acima do ponto medido (ou do polo, se não há posição)."""
-    n = position.normal if position is not None else np.array([0.0, 0.0, 1.0])
-    return n * (DOME_R + 0.5)
+    L: float = 150.0              # distância entre os sensores (mm)
+    R: float = 90.0               # raio da esfera (mm)
+    bar_axis: str = "+X"          # eixo da placa: do sensor 1 (esquerda) para o 2 (direita)
+    toward_axis: str = "-Z"       # eixo da placa: para onde os sensores olham
 
 
 def _patches():
@@ -160,9 +157,9 @@ def _hull(P):
     return half(pts) + half(pts[::-1])
 
 
-def _board_cmds(proj, center, Rb, cdir):
+def _board_cmds(proj, center, Rb, cdir, half):
     cmds, items = [], []
-    for corners, n, rgb in _FACES:
+    for corners, n, rgb in _faces(half):
         nn = Rb @ n
         if nn @ cdir <= 0:
             continue
@@ -234,34 +231,70 @@ def _dome_cmds(proj, cdir):
 
 def scene_commands(w, h, q, az, el, tof=None, position=None):
     """
-    Hemisfério fixo no centro com o sensor sobre ele. `position` (position.Position, vinda do
-    pipeline: orientação × α) coloca o sensor no ponto medido; None deixa a placa no polo com
-    a orientação real. `tof` (ToFInfo) escreve H e α no canto da cena.
+    Hemisfério fixo no centro (raio DOME_R) e a placa. `position` (position.Position, do
+    pipeline: orientação × α, longitude pela cor) liga a pose completa: o ponto medido fica
+    na superfície, a barra a H dele e os dois raios terminam na superfície (position.
+    scene_points). Sem `position` a placa fica no polo com a orientação real. `tof`
+    (ToFInfo) traz a leitura (H, α) e a geometria (L, R, eixos).
     """
     cdir = np.array([np.cos(el) * np.cos(az), np.cos(el) * np.sin(az), np.sin(el)])
     fwd = -cdir
     right = np.cross(fwd, [0, 0, 1.0])
     right /= np.linalg.norm(right)
     cup = np.cross(right, fwd)
-    s = 0.27 * min(w, h) * 1.9 / 2.6
+    s = 0.27 * min(w, h) * 1.9 / 3.6
     cx, cy = w / 2, h / 2
 
     def proj(P):
         P = np.atleast_2d(P) - _FOCUS
         return np.column_stack((cx + (P @ right) * s, cy - (P @ cup) * s))
 
+    info = tof if tof is not None else ToFInfo()
+    res = info.res
+    bar, toward = axis_vector(info.bar_axis), axis_vector(info.toward_axis)
+    if np.linalg.norm(np.cross(bar, toward)) < 0.5:
+        bar, toward = axis_vector("+X"), axis_vector("-Z")
+    k = DOME_R / info.R
+    ib, it = int(np.argmax(np.abs(bar))), int(np.argmax(np.abs(toward)))
+    half = np.full(3, 0.35)
+    half[ib], half[it] = max(info.L * k / 2.0, 0.3), 0.06       # a placa tem o tamanho da barra
+
     R = Q.to_matrix(q) if q is not None else np.eye(3)
-    center = sensor_center(position)
-    res = tof.res if tof is not None else None
+    Rd = position.display_rotation(R) if position is not None else R
+    pts = None
+    if position is not None and res is not None:
+        pts = scene_points(res, info.L, info.R, Rd, bar, toward, position.normal, DOME_R)
+        center = pts["m"]
+    elif position is not None:
+        center = position.normal * (DOME_R + 0.5)
+    else:
+        center = np.array([0.0, 0.0, DOME_R + 0.5])
 
     dome, back, patches, front = _dome_cmds(proj, cdir)
-    board = _board_cmds(proj, center, R, cdir)
+    board = _board_cmds(proj, center, Rd, cdir, half)
     in_front = center @ cdir >= 0
     cmds = dome + back + patches + ([] if in_front else board) + front + (board if in_front else [])
-    if position is not None:    # ponto medido na superfície e o fio até a placa
-        (x0, y0), (x1, y1) = proj(np.array([center, position.normal * DOME_R]))
-        cmds.append(("line", [x0, y0, x1, y1], theme.GOOD, 1.5, False, (4, 3)))
-        cmds.append(("oval", x1, y1, 5, theme.GOOD, "#0d0f13"))
+    if pts is not None:      # raios dos sensores até a superfície, e o H até o ponto medido
+        def seg(a, b, color, width, arrow=False, dash=None):
+            (x0, y0), (x1, y1) = proj(np.array([a, b]))
+            cmds.append(("line", [x0, y0, x1, y1], color, width, arrow, dash))
+
+        def dot(p, rad, fill):
+            x, y = proj(p)[0]
+            cmds.append(("oval", x, y, rad, fill, "#0d0f13"))
+
+        seg(pts["s1"], pts["c"], theme.SERIES[0], 2)
+        seg(pts["s2"], pts["d"], theme.SERIES[2], 2)
+        seg(pts["foot"], pts["h"], theme.GOOD, 2, True, (5, 3))
+        dot(pts["s1"], 4, theme.SERIES[0])
+        dot(pts["s2"], 4, theme.SERIES[2])
+        dot(pts["c"], 3, theme.SERIES[0])
+        dot(pts["d"], 3, theme.SERIES[2])
+        dot(pts["h"], 5, theme.GOOD)
+    elif position is not None:
+        seg_a, seg_b = proj(np.array([center, position.normal * DOME_R]))
+        cmds.append(("line", [*seg_a, *seg_b], theme.GOOD, 1.5, False, (4, 3)))
+        cmds.append(("oval", seg_b[0], seg_b[1], 5, theme.GOOD, "#0d0f13"))
 
     # norte (+X) na borda da base
     n0, n1, nt = proj(np.array([(DOME_R + 0.55, 0, 0), (DOME_R + 1.0, 0, 0), (DOME_R + 1.25, 0, 0)]))
@@ -275,8 +308,8 @@ def scene_commands(w, h, q, az, el, tof=None, position=None):
         if res.warning:
             cmds.append(("text", 10, 60, res.warning, theme.WARN, "nw", 9, True))
     else:
-        msg = (tof.message if tof is not None else "") or "aguardando leitura dos ToF…"
-        cmds.append(("text", 10, 10, "H, α: " + msg, theme.WARN, "nw", 9, True))
+        cmds.append(("text", 10, 10, "H, α: " + (info.message or "aguardando leitura dos ToF…"),
+                     theme.WARN, "nw", 9, True))
 
     if position is not None:
         foot = (f"posição ligada · α {position.alpha_deg:+.1f}° · a {position.polar_deg:.0f}° do polo · "
@@ -284,8 +317,10 @@ def scene_commands(w, h, q, az, el, tof=None, position=None):
                 f"altura {100 * position.height_ratio:.0f}% do raio")
         if position.alpha_assumed:
             foot += " · sem ToF válido: α = 0 assumido"
-        if position.clamped:
-            foot += " · limitado ao equador"
+        if position.below_equator:
+            cmds.append(("text", 10, h - 40, "⚠ abaixo do equador: a orientação diz que os sensores olham "
+                         "para cima. Confira o eixo dos sensores em Geometria…",
+                         theme.BAD, "sw", 9, True))
     else:
         foot = "posição desligada: placa fixa no topo, com a orientação real"
     cmds.append(("text", 8, h - 22, foot, theme.MUTED, "sw", 8, False))

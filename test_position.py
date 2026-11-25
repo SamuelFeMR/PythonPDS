@@ -30,7 +30,7 @@ def main():
     rnd = random.Random(3)
     names = ["+X", "-X", "+Y", "-Y", "+Z", "-Z"]
     pairs = [(b, t) for b in names for t in names if b[-1] != t[-1]]
-    n = worst = worst_yaw = 0
+    n = worst = worst_yaw = worst_pose = worst_surf = worst_ray = worst_H = 0
     while n < 2000:
         L = rnd.uniform(80, 300)
         Rs = rnd.uniform(30, 120)
@@ -57,14 +57,38 @@ def main():
         est = P.world_normal(R, res.alpha_deg, bar, tow)
         worst = max(worst, float(np.linalg.norm(est - truth_n)))
 
-        # o yaw não pode mexer no ponto (e a posição pública não tem yaw)
+        # o yaw só gira o ponto em torno da vertical: o polar não muda
         pos = P.compute(0.0, q, res.alpha_deg, bar_name, tow_name)
         a = rnd.uniform(0, 2 * math.pi)
         qz = np.array([math.cos(a / 2), 0, 0, math.sin(a / 2)])
         pos2 = P.compute(0.0, Q.multiply(qz, q), res.alpha_deg, bar_name, tow_name)
-        worst_yaw = max(worst_yaw, float(np.linalg.norm(pos.normal - pos2.normal)))
+        worst_yaw = max(worst_yaw, abs(pos.polar_deg - pos2.polar_deg))
+
+        # POSE COMPLETA: com a normal do IMU (sem cor) a placa volta à pose verdadeira, e com
+        # qualquer longitude da cor os pontos focais continuam NA SUPERFÍCIE e os sensores fora
+        k = 1.0 / Rs
+        pts = P.scene_points(res, L, Rs, pos.display_rotation(R), bar, tow, pos.normal, 1.0)
+        worst_pose = max(worst_pose, float(np.linalg.norm(pts["s1"] - origin * k)),
+                         float(np.linalg.norm(pts["s2"] - (origin + R @ bar * L) * k)))
+        lon = rnd.uniform(0, 360)
+        pc = P.with_longitude(pos, lon, "cor")
+        pts = P.scene_points(res, L, Rs, pc.display_rotation(R), bar, tow, pc.normal, 1.0)
+        for key in ("h", "c", "d"):
+            worst_surf = max(worst_surf, abs(np.linalg.norm(pts[key]) - 1.0))
+        assert np.linalg.norm(pts["s1"]) > 1.0 and np.linalg.norm(pts["s2"]) > 1.0   # fora da esfera
+        # a placa olha para o ponto: o raio do sensor 1 sai na direção (60° da barra, para a esfera)
+        ray = (pts["c"] - pts["s1"]) / np.linalg.norm(pts["c"] - pts["s1"])
+        want = pc.display_rotation(R) @ (0.5 * bar + math.sqrt(3) / 2 * tow)
+        worst_ray = max(worst_ray, float(np.linalg.norm(ray - want)))
+        # altura H: do pé de h na barra até h, ao longo da direção dos sensores (negativa se h
+        # ficar atrás da linha da barra, o que acontece com esfera grande e barra curta)
+        H_world = float((pts["h"] - pts["foot"]) @ (pc.display_rotation(R) @ tow)) * Rs   # com sinal
+        worst_H = max(worst_H, abs(H_world - res.H))
         n += 1
-    print(f"{n} poses aleatórias: erro máx. da normal {worst:.2e}, erro máx. com yaw {worst_yaw:.2e}")
+    print(f"{n} poses aleatórias: normal {worst:.2e}, polar com yaw {worst_yaw:.2e}")
+    print(f"pose completa: sensores {worst_pose:.2e}, c/d/h na superfície {worst_surf:.2e}, "
+          f"raios {worst_ray:.2e}, H {worst_H:.2e}")
+    assert max(worst_pose, worst_surf, worst_ray, worst_H) < 1e-9
     assert worst < 1e-9
     assert worst_yaw < 1e-9
     # casos de referência
@@ -80,9 +104,9 @@ def main():
     a = math.radians(30)                                                    # inclinada 30° em Y, α=0
     p = P.compute(0, np.array([math.cos(a / 2), 0, math.sin(a / 2), 0]), 0.0)
     assert abs(p.polar_deg - 30) < 1e-9
-    # sensores para cima (placa de cabeça para baixo): abaixo do equador, trava nele
+    # sensores para cima (placa de cabeça para baixo): abaixo do equador, sem travar
     p = P.compute(0, np.array([0.0, 1, 0, 0]), 0.0)
-    assert p.clamped and abs(p.polar_deg - 90) < 1e-9
+    assert p.below_equator and abs(p.polar_deg - 180) < 1e-9
 
     # --- cor -> longitude (convenção do gomos_r9.py: matiz = lon/360, S = V = 1)
     import colorsys
@@ -110,6 +134,9 @@ def main():
     n = p1.normal
     assert abs(math.degrees(math.acos(n[2])) - 30) < 1e-9 and abs(math.degrees(math.atan2(n[1], n[0])) - 120) < 1e-9
     assert P.with_longitude(p0, None, "cor") is p0
+    # o giro do yaw leva a normal do IMU até a longitude da cor
+    assert abs(p0.azimuth_deg) < 1e-9 and abs(p1.yaw_shift_deg - 120) < 1e-9
+    assert np.linalg.norm(P.rotate_z(p1.yaw_shift_deg) @ p0.normal - p1.normal) < 1e-12
     print("OK")
 
 
