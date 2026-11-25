@@ -16,9 +16,10 @@ from typing import Optional
 
 import numpy as np
 
+import filter_config
 import geometry
 import quaternion as Q
-from filters import DEFAULT_FILTER, FILTERS, FilterInput, make_filter
+from filters import FilterInput, make_filter
 from sample import Sample
 from sensor_io import Frames, load_config
 
@@ -76,22 +77,25 @@ class GeometryState:
         return [self.h1, self.h2, self.alpha_deg, self.H, self.Y]
 
 
+TOF_CAL_N = 50   # amostras (~1 s a 50 Hz) usadas na calibração do ToF
 TOF_AVG_N = 5   # amostras da média móvel dos sensores de distância
 
 
 class Pipeline:
     def __init__(self):
         self.lock = threading.RLock()
-        self.use_mag = True
         self.align_enabled = True
         self.force_default_frames = False   # usado pela fonte Demo
         self.config_path = None
         self._frames_cfg = Frames(None)
         self.reload_alignment()
 
-        self._saved_params = {}
-        self.filter_name = DEFAULT_FILTER
-        self.filter = make_filter(DEFAULT_FILTER)
+        # parâmetros fixos do filtro: filter_config.json
+        self.use_mag = True
+        self.filter_name = ""
+        self.filter = None
+        self.filter_message = ""
+        self.reload_filter_config()
 
         self.gyro_bias = np.zeros(3)
         self._calib_target = 0
@@ -104,6 +108,8 @@ class Pipeline:
         self._geo_t0_us: Optional[int] = None
         self.tof_avg_n = TOF_AVG_N
         self._tof_win = deque(maxlen=self.tof_avg_n)   # (dist1, dist2)
+        self._tof_cal = None       # calibração em andamento: {"H": altura, "buf": [(d1, d2)]}
+        self._tof_cal_text = ""
 
     # -------------------------------------------------------- alinhamento
     def reload_alignment(self):
@@ -130,19 +136,15 @@ class Pipeline:
             self.gyro_bias[:] = 0.0   # o bias estava no referencial anterior
 
     # ------------------------------------------------------------- filtro
-    def set_filter(self, name: str):
+    def reload_filter_config(self):
+        """(Re)lê filter_config.json e recria o filtro com esses parâmetros."""
+        cfg = filter_config.load()
         with self.lock:
-            self._saved_params[self.filter_name] = dict(self.filter.values)
-            self.filter_name = name
-            self.filter = make_filter(name, **self._saved_params.get(name, {}))
+            self.filter_name = cfg.filter
+            self.filter = make_filter(cfg.filter, **cfg.params)
+            self.use_mag = cfg.use_mag
+            self.filter_message = cfg.message
             self._prev_t_us = None
-
-    def set_filter_param(self, key: str, value: float):
-        with self.lock:
-            self.filter.set_param(key, value)
-
-    def filter_names(self):
-        return list(FILTERS)
 
     # ------------------------------------------------------- calibração
     def start_gyro_calibration(self, n: int = 200):
@@ -167,6 +169,7 @@ class Pipeline:
             self._t0_us = None
             self._geo_t0_us = None
             self._tof_win.clear()
+            self._tof_cal = None
 
     # ------------------------------------------------- sensores de distância
     def set_geometry(self, L: float, R: float, save: bool = True,
@@ -181,8 +184,13 @@ class Pipeline:
         if not geometry.axes_ok(ba, ta):
             raise ValueError("o eixo da barra e o eixo para o cilindro precisam ser de eixos diferentes")
         with self.lock:
+            # a calibração do ToF foi calculada com o L e o R antigos: mudou, apaga
+            same = float(L) == old.L and float(R) == old.R
             self.geometry_cfg = geometry.GeometryConfig(
-                L=float(L), R=float(R), saved=save, bar_axis=ba, toward_axis=ta)
+                L=float(L), R=float(R), saved=save, bar_axis=ba, toward_axis=ta,
+                tof_offset=old.tof_offset if same else 0.0)
+            if not same and old.tof_offset:
+                self._tof_cal_text = "L ou R mudou: calibração do ToF apagada"
         return geometry.save_config(self.geometry_cfg) if save else ""
 
     def process_geometry(self, s: Sample) -> GeometryState:
@@ -190,17 +198,70 @@ class Pipeline:
             if self._geo_t0_us is None:
                 self._geo_t0_us = s.t_us
             t = (s.t_us - self._geo_t0_us) * 1e-6
-            cfg = self.geometry_cfg
             if not s.tof_ok:
                 self._tof_win.clear()   # não mistura leituras antigas com as novas
             else:
+                if self._tof_cal is not None:   # calibração usa as leituras sem média nem offset
+                    self._tof_cal["buf"].append((float(s.dist1), float(s.dist2)))
+                    if len(self._tof_cal["buf"]) >= TOF_CAL_N:
+                        self._finish_tof_calibration()
                 self._tof_win.append((float(s.dist1), float(s.dist2)))
-                h1, h2 = np.mean(self._tof_win, axis=0)   # média móvel de N amostras
+            cfg = self.geometry_cfg
+            if s.tof_ok:   # média móvel de N amostras + offset da calibração
+                h1, h2 = (float(v) + cfg.tof_offset for v in np.mean(self._tof_win, axis=0))
         if not s.tof_ok:
             return GeometryState(t, float(s.dist1), float(s.dist2), False, "ToF inválido (tof_ok = 0)")
-        h1, h2 = float(h1), float(h2)
         r = geometry.compute(h1, h2, cfg.L, cfg.R)
         return GeometryState(t, h1, h2, r.valid, r.reason, r)
+
+    # ------------------------------------------------- calibração do ToF
+    def start_tof_calibration(self, H_known: float) -> str:
+        """Com o objeto parado numa altura H conhecida (mesma unidade de L e R), mede
+        TOF_CAL_N amostras e calcula o offset que faz o H calculado bater com H_known.
+        Retorna "" se começou, ou o motivo de não poder."""
+        with self.lock:
+            if not self.geometry_cfg.saved:
+                return "salve L e R antes (botão Geometria…)"
+            if not H_known > 0:
+                return "a altura precisa ser positiva"
+            self._tof_cal = {"H": float(H_known), "buf": []}
+            self._tof_cal_text = ""
+        return ""
+
+    def clear_tof_calibration(self):
+        with self.lock:
+            self._tof_cal = None
+            cfg = self.geometry_cfg
+            self.geometry_cfg = geometry.GeometryConfig(
+                cfg.L, cfg.R, cfg.saved, cfg.bar_axis, cfg.toward_axis, 0.0)
+            self._tof_cal_text = "calibração do ToF removida"
+            if cfg.saved:
+                geometry.save_config(self.geometry_cfg)
+
+    def _finish_tof_calibration(self):   # chamado com o lock tomado
+        cal, self._tof_cal = self._tof_cal, None
+        h1, h2 = np.mean(cal["buf"], axis=0)
+        cfg = self.geometry_cfg
+        off, why = geometry.solve_offset(float(h1), float(h2), cal["H"], cfg.L, cfg.R)
+        if off is None:
+            self._tof_cal_text = f"calibração falhou: {why}"
+            return
+        self.geometry_cfg = geometry.GeometryConfig(
+            cfg.L, cfg.R, cfg.saved, cfg.bar_axis, cfg.toward_axis, off)
+        try:
+            geometry.save_config(self.geometry_cfg)
+            self._tof_cal_text = f"ToF calibrado em H = {cal['H']:g}: offset {off:+.2f}"
+        except OSError as e:
+            self._tof_cal_text = f"offset {off:+.2f} aplicado, mas não salvou: {e}"
+
+    def tof_calibration_text(self) -> str:
+        with self.lock:
+            if self._tof_cal is not None:
+                return f"Calibrando ToF… {len(self._tof_cal['buf'])}/{TOF_CAL_N} (mantenha parado)"
+            if self._tof_cal_text:
+                return self._tof_cal_text
+            off = self.geometry_cfg.tof_offset
+            return f"ToF: offset {off:+.2f}" if off else "ToF: sem calibração"
 
     # ------------------------------------------------------------ passo
     def process(self, s: Sample) -> Optional[PoseState]:

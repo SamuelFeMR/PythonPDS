@@ -14,7 +14,7 @@ import numpy as np
 
 @dataclass(frozen=True)
 class Param:
-    """Parâmetro ajustável: a interface gera um controle deslizante para ele."""
+    """Parâmetro do filtro. O valor vem de filter_config.json; o padrão é `default`."""
     key: str
     label: str
     default: float

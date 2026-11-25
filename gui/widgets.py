@@ -89,17 +89,3 @@ class OrientationView(tk.Canvas):
             return
         self.delete("all")
         run_commands(self, render.scene_commands(w, h, q, self.az, self.el, sphere))
-
-
-class GeometryView(tk.Canvas):
-    """Desenho da barra com os 2 sensores de distância, o cilindro, H e alpha."""
-
-    def __init__(self, master):
-        super().__init__(master, bg=theme.CANVAS_BG, highlightthickness=0)
-
-    def draw(self, result, L, R, message=""):
-        w, h = self.winfo_width(), self.winfo_height()
-        if w < 120 or h < 120:
-            return
-        self.delete("all")
-        run_commands(self, render.geometry_commands(w, h, result, L, R, message))

@@ -6,7 +6,8 @@ main_gui.py — interface do projeto.
     python main_gui.py --port COM7 --baud 921600
     python main_gui.py --demo               # sensor simulado, sem hardware
 
-Página 1 (F1): pose.      Página 2 (F2): dados brutos do ESP32.
+Tela única: linha de dados brutos no topo, cena 3D (placa + esfera com H e α) e gráficos.
+Parâmetros do filtro: filter_config.json.  Geometria e calibração do ToF: geometry_config.json.
 """
 
 import argparse

@@ -4,7 +4,7 @@ Registro de filtros.
 Para criar um filtro novo:
   1) crie uma classe que herda de PoseFilter (ver base.py);
   2) adicione a classe na tupla abaixo.
-Ele aparece sozinho na lista da página de pose.
+Para usá-lo, ponha o nome dele em "filter" no filter_config.json.
 """
 
 from .base import FilterInput, Param, PoseFilter

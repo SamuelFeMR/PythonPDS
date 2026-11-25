@@ -105,6 +105,32 @@ def main():
     assert G.compute(40, 40, 100, 31).warning != ""      # Y = 60 ≈ 2R = 62
     # sinal: sensor da direita mais longe => alpha > 0
     assert G.compute(30, 50, 100, 60).alpha_deg > 0 > G.compute(50, 30, 100, 60).alpha_deg
+
+    # calibração: um bias comum nos dois sensores é recuperado a partir de H conhecido
+    rnd = random.Random(2)
+    n_cal = worst_cal = 0
+    while n_cal < 300:
+        L = rnd.uniform(80, 300)
+        R = rnd.uniform(30, 120)
+        O = (L / 2 + rnd.uniform(-0.3, 0.3) * R, rnd.uniform(1.0, 3.0) * L)
+        if min(math.hypot(O[0], O[1]), math.hypot(L - O[0], O[1])) <= R:
+            continue
+        tr = truth(L, R, O)
+        if tr is None:
+            continue
+        h1, h2, _, H_t = tr
+        r0 = G.compute(h1, h2, L, R)
+        if not r0.valid or r0.warning or H_t <= 0:
+            continue
+        bias = rnd.uniform(-8, 8)                      # sensor lê h + bias
+        d, why = G.solve_offset(h1 + bias, h2 + bias, H_t, L, R)
+        assert d is not None, why
+        worst_cal = max(worst_cal, abs(G.compute(h1 + bias + d, h2 + bias + d, L, R).H - H_t))
+        n_cal += 1
+    print(f"calibração: {n_cal} casos, erro máx. de H após calibrar {worst_cal:.2e}")
+    assert worst_cal < 1e-6
+    assert G.solve_offset(50, 50, -5, 100, 60)[0] is None
+    assert G.solve_offset(50, 50, 1e6, 100, 60)[0] is None
     print("OK")
 
 

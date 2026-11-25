@@ -74,6 +74,9 @@ class GeometryConfig:
     # Eixos da PLACA (referencial do IMU) usados só para DESENHAR a esfera na página 1:
     bar_axis: str = "+X"      # sentido do sensor 1 (esquerda) para o sensor 2 (direita)
     toward_axis: str = "+Y"   # sentido da barra para o cilindro (para onde os sensores olham)
+    # Calibração do ToF: valor somado às DUAS leituras (h1 e h2), na mesma unidade delas.
+    # É calculado por solve_offset() a partir de uma altura H conhecida.
+    tof_offset: float = 0.0
 
 
 def config_path():
@@ -94,6 +97,8 @@ def load_config() -> GeometryConfig:
         ba, ta = d.get("bar_axis", cfg.bar_axis), d.get("toward_axis", cfg.toward_axis)
         if axes_ok(ba, ta):
             cfg.bar_axis, cfg.toward_axis = ba, ta
+        off = float(d.get("tof_offset", 0.0))
+        cfg.tof_offset = off if math.isfinite(off) else 0.0
         return cfg
     except (OSError, ValueError, KeyError, TypeError):
         return GeometryConfig()
@@ -103,7 +108,7 @@ def save_config(cfg: GeometryConfig) -> str:
     path = config_path()
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"L": cfg.L, "R": cfg.R, "bar_axis": cfg.bar_axis,
-                   "toward_axis": cfg.toward_axis}, f, indent=2)
+                   "toward_axis": cfg.toward_axis, "tof_offset": cfg.tof_offset}, f, indent=2)
     return path
 
 
@@ -167,3 +172,55 @@ def compute(h1: float, h2: float, L: float, R: float) -> GeometryResult:
     res.Y, res.F = Y, F
     res.c, res.d, res.h, res.center = c, d, hpt, center
     return res
+
+
+# ------------------------------------------------------------------ calibração
+def solve_offset(h1: float, h2: float, H_known: float, L: float, R: float):
+    """
+    Calibração do ToF a partir de uma altura conhecida.
+
+    Com o objeto numa altura H_known (medida por fora), procura o valor `d` que,
+    somado às DUAS leituras, faz compute(h1 + d, h2 + d, L, R).H == H_known.
+    (Uma altura só determina um parâmetro: o erro comum aos dois sensores, por
+    exemplo a distância entre o sensor e a borda da barra ou o bias do ToF.)
+
+    Retorna (d, "") ou (None, motivo). Se houver mais de uma solução, devolve a
+    de menor |d|.
+    """
+    if not (math.isfinite(h1) and math.isfinite(h2) and math.isfinite(H_known)):
+        return None, "leituras inválidas"
+    if H_known <= 0:
+        return None, "a altura conhecida precisa ser positiva"
+    lo = -min(h1, h2) + 1e-6          # h > 0
+    hi = L - (h1 + h2) / 2.0 - 1e-6   # h1 + h2 < 2L
+    if hi <= lo:
+        return None, "leituras incompatíveis com L"
+
+    def f(d):
+        r = compute(h1 + d, h2 + d, L, R)
+        return r.H - H_known if r.valid else math.nan
+
+    n = 2000
+    grid = [lo + (hi - lo) * i / n for i in range(n + 1)]
+    vals = [f(d) for d in grid]
+    roots = []
+    for i in range(n):
+        a, b, fa, fb = grid[i], grid[i + 1], vals[i], vals[i + 1]
+        if math.isnan(fa) or math.isnan(fb):
+            continue
+        if fa == 0.0:
+            roots.append(a)
+        elif fa * fb < 0:
+            for _ in range(60):                       # bisseção
+                m = (a + b) / 2.0
+                fm = f(m)
+                if math.isnan(fm):
+                    break
+                if fa * fm <= 0:
+                    b = m
+                else:
+                    a, fa = m, fm
+            roots.append((a + b) / 2.0)
+    if not roots:
+        return None, "nenhum offset leva essas leituras a essa altura (confira L, R e H)"
+    return min(roots, key=abs), ""

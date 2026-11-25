@@ -1,0 +1,10 @@
+{
+  "filter": "Madgwick (mag só no yaw)",
+  "use_mag": true,
+  "params": {
+    "beta": 0.1,
+    "mag_rate": 0.02,
+    "accel_tol": 0.25,
+    "mag_tol": 0.3
+  }
+}

@@ -33,17 +33,12 @@ def apply_style(root):
     st.configure("Muted.TLabel", background=PANEL, foreground=MUTED)
     st.configure("H.TLabel", background=PANEL, foreground=ACCENT, font=("Segoe UI", 10, "bold"))
     st.configure("Mono.TLabel", background=PANEL, foreground=FG, font=FONT_MONO)
+    st.configure("RawLine.TLabel", background=PANEL, foreground=FG, font=("Consolas", 10))
     st.configure("Status.TLabel", background=PANEL, foreground=MUTED)
 
     st.configure("TButton", background=PANEL2, foreground=FG, padding=(10, 5),
                  borderwidth=0, focusthickness=0)
     st.map("TButton", background=[("active", "#3a3f4c"), ("pressed", "#3a3f4c")])
-    st.configure("Nav.TButton", background=PANEL, foreground=MUTED,
-                 padding=(18, 9), font=("Segoe UI", 11, "bold"))
-    st.map("Nav.TButton", background=[("active", PANEL2)], foreground=[("active", FG)])
-    st.configure("NavActive.TButton", background=ACCENT, foreground="white",
-                 padding=(18, 9), font=("Segoe UI", 11, "bold"))
-    st.map("NavActive.TButton", background=[("active", ACCENT)])
     st.configure("Rec.TButton", background=BAD, foreground="white")
     st.map("Rec.TButton", background=[("active", BAD)])
 
@@ -54,6 +49,5 @@ def apply_style(root):
                  foreground=FG, arrowcolor=FG)
     st.map("TCombobox", fieldbackground=[("readonly", PANEL2)],
            foreground=[("readonly", FG)])
-    st.configure("Horizontal.TScale", background=PANEL, troughcolor=PANEL2)
     root.option_add("*TCombobox*Listbox.background", PANEL2)
     root.option_add("*TCombobox*Listbox.foreground", FG)
