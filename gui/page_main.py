@@ -79,13 +79,13 @@ class MainPage(ttk.Frame):
         header("POSE")
         self.vars = {}
         row = nxt()
-        for i, key in enumerate(("roll", "pitch", "yaw", "tilt")):
+        for i, key in enumerate(("roll", "pitch", "yaw", "tilt", "polo", "azim")):
             v = tk.StringVar(value=f"{key:<5} —")
             ttk.Label(side, textvariable=v, style="Mono.TLabel").grid(
                 row=row + i // 2, column=i % 2, sticky="w")
             self.vars[key] = v
-        nxt()
-        self.pos_var = tk.BooleanVar(value=False)
+        nxt(), nxt()   # 3 linhas: roll/pitch, yaw/tilt, polo/azim
+        self.pos_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(side, text="Posição do sensor RGB na esfera", variable=self.pos_var
                         ).grid(row=nxt(), column=0, columnspan=2, sticky="w", pady=(6, 0))
 
@@ -100,7 +100,7 @@ class MainPage(ttk.Frame):
         ttk.Entry(side, textvariable=self.H_var, width=8, justify="right").grid(
             row=row, column=1, sticky="e", pady=(8, 0))
         row = nxt()
-        ttk.Button(side, text="Calibrar ToF", command=self._calibrate_tof).grid(
+        ttk.Button(side, text="Calibrar ToF (α = 0)", command=self._calibrate_tof).grid(
             row=row, column=0, sticky="we", pady=(4, 0), padx=(0, 3))
         ttk.Button(side, text="Limpar", command=self._clear_tof).grid(
             row=row, column=1, sticky="we", pady=(4, 0), padx=(3, 0))
@@ -165,18 +165,17 @@ class MainPage(ttk.Frame):
     # --------------------------------------------------------------- H / α
     def _tof_info(self):
         g = self.store.latest_geom
-        cfg = self.pipeline.geometry_cfg
         if g is None:
-            return ToFInfo(None, "aguardando leitura dos ToF…", cfg.bar_axis, cfg.toward_axis)
-        return ToFInfo(g.result if g.valid else None, "" if g.valid else g.reason,
-                       cfg.bar_axis, cfg.toward_axis)
+            return ToFInfo(None, "aguardando leitura dos ToF…")
+        return ToFInfo(g.result if g.valid else None, "" if g.valid else g.reason)
 
     # ------------------------------------------------------------ refresh
     def refresh(self):
         self.raw_var.set(raw_line(self.store.latest_sample))
 
         pose = self.store.latest_pose
-        self.view.draw(pose.q if pose else None, self._tof_info(), self.pos_var.get())
+        pos = self.store.latest_position
+        self.view.draw(pose.q if pose else None, self._tof_info(), pos if self.pos_var.get() else None)
 
         gyro_txt = self.pipeline.calibration_text()
         tof_txt = self._cal_msg or self.pipeline.tof_calibration_text()
@@ -190,6 +189,9 @@ class MainPage(ttk.Frame):
             r, p, y = pose.euler_deg
             for key, val in (("roll", r), ("pitch", p), ("yaw", y), ("tilt", pose.tilt_deg)):
                 self.vars[key].set(f"{key:<5}{val:+7.1f}°")
+        if pos:   # ponto na esfera: orientação × α
+            self.vars["polo"].set(f"polo {pos.polar_deg:7.1f}°")
+            self.vars["azim"].set(f"azim {pos.azimuth_deg:+7.1f}°")
 
         t, d = self.store.snapshot_pose(WINDOW_S)
         self.chart.update_data(t, d[:, :4] if len(t) else d, WINDOW_S)

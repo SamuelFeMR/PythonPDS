@@ -18,6 +18,7 @@ import numpy as np
 
 import filter_config
 import geometry
+import position
 import quaternion as Q
 from filters import FilterInput, make_filter
 from sample import Sample
@@ -187,8 +188,10 @@ class Pipeline:
             # a calibração do ToF foi calculada com o L e o R antigos: mudou, apaga
             same = float(L) == old.L and float(R) == old.R
             self.geometry_cfg = replace(old, L=float(L), R=float(R), saved=save, bar_axis=ba,
-                                        toward_axis=ta, tof_offset=old.tof_offset if same else 0.0)
-            if not same and old.tof_offset:
+                                        toward_axis=ta,
+                                        tof_offset1=old.tof_offset1 if same else 0.0,
+                                        tof_offset2=old.tof_offset2 if same else 0.0)
+            if not same and (old.tof_offset1 or old.tof_offset2):
                 self._tof_cal_text = "L ou R mudou: calibração do ToF apagada"
         return geometry.save_config(self.geometry_cfg) if save else ""
 
@@ -207,11 +210,20 @@ class Pipeline:
                 self._tof_win.append((float(s.dist1), float(s.dist2)))
             cfg = self.geometry_cfg
             if s.tof_ok:   # média móvel de N amostras + offset da calibração
-                h1, h2 = (float(v) + cfg.tof_offset for v in np.mean(self._tof_win, axis=0))
+                m1, m2 = np.mean(self._tof_win, axis=0)
+                h1, h2 = float(m1) + cfg.tof_offset1, float(m2) + cfg.tof_offset2
         if not s.tof_ok:
             return GeometryState(t, float(s.dist1), float(s.dist2), False, "ToF inválido (tof_ok = 0)")
         r = geometry.compute(h1, h2, cfg.L, cfg.R)
         return GeometryState(t, h1, h2, r.valid, r.reason, r)
+
+    # ------------------------------------------------- posição na esfera
+    def process_position(self, pose: PoseState, geom: Optional[GeometryState]) -> position.Position:
+        """Cruza a orientação (pose) com o ângulo de ataque α (geom), da MESMA amostra."""
+        with self.lock:
+            cfg = self.geometry_cfg
+        alpha = geom.alpha_deg if geom is not None and geom.valid else None
+        return position.compute(pose.t_s, pose.q, alpha, cfg.bar_axis, cfg.toward_axis)
 
     # ------------------------------------------------- calibração do ToF
     def start_tof_calibration(self, H_known: float) -> str:
@@ -231,7 +243,7 @@ class Pipeline:
         with self.lock:
             self._tof_cal = None
             cfg = self.geometry_cfg
-            self.geometry_cfg = replace(cfg, tof_offset=0.0)
+            self.geometry_cfg = replace(cfg, tof_offset1=0.0, tof_offset2=0.0)
             self._tof_cal_text = "calibração do ToF removida"
             if cfg.saved:
                 geometry.save_config(self.geometry_cfg)
@@ -240,25 +252,30 @@ class Pipeline:
         cal, self._tof_cal = self._tof_cal, None
         h1, h2 = np.mean(cal["buf"], axis=0)
         cfg = self.geometry_cfg
-        off, why = geometry.solve_offset(float(h1), float(h2), cal["H"], cfg.L, cfg.R)
-        if off is None:
+        # os dois sensores devem ler o mesmo valor (α = 0): h verdadeiro a partir de H
+        h, why = geometry.true_distance(cal["H"], cfg.L, cfg.R)
+        if h is None:
             self._tof_cal_text = f"calibração falhou: {why}"
             return
-        self.geometry_cfg = replace(cfg, tof_offset=off)
+        off1, off2 = h - float(h1), h - float(h2)
+        self.geometry_cfg = replace(cfg, tof_offset1=off1, tof_offset2=off2)
         try:
             geometry.save_config(self.geometry_cfg)
-            self._tof_cal_text = f"ToF calibrado em H = {cal['H']:g}: offset {off:+.2f}"
+            self._tof_cal_text = (f"ToF calibrado em H = {cal['H']:g} (h = {h:.1f}): "
+                                  f"offset h1 {off1:+.2f}, h2 {off2:+.2f}")
         except OSError as e:
-            self._tof_cal_text = f"offset {off:+.2f} aplicado, mas não salvou: {e}"
+            self._tof_cal_text = f"offsets aplicados, mas não salvou: {e}"
 
     def tof_calibration_text(self) -> str:
         with self.lock:
             if self._tof_cal is not None:
-                return f"Calibrando ToF… {len(self._tof_cal['buf'])}/{TOF_CAL_N} (mantenha parado)"
+                return f"Calibrando ToF… {len(self._tof_cal['buf'])}/{TOF_CAL_N} (parado, sensores lendo o mesmo valor)"
             if self._tof_cal_text:
                 return self._tof_cal_text
-            off = self.geometry_cfg.tof_offset
-            return f"ToF: offset {off:+.2f}" if off else "ToF: sem calibração"
+            c = self.geometry_cfg
+            if c.tof_offset1 or c.tof_offset2:
+                return f"ToF: offset h1 {c.tof_offset1:+.2f}, h2 {c.tof_offset2:+.2f}"
+            return "ToF: sem calibração"
 
     # ------------------------------------------------------------ passo
     def process(self, s: Sample) -> Optional[PoseState]:

@@ -55,6 +55,7 @@ class DataStore:
         self.latest_sample = None
         self.latest_pose = None
         self.latest_geom = None
+        self.latest_position = None
         self.valid = 0
         self.invalid = 0
         self.rate_hz = 0.0
@@ -72,6 +73,7 @@ class DataStore:
             self.latest_sample = None
             self.latest_pose = None
             self.latest_geom = None
+            self.latest_position = None
             self.valid = 0
             self.invalid = 0
             self.rate_hz = 0.0
@@ -96,6 +98,10 @@ class DataStore:
         with self.lock:
             self.pose.append(pose.t_s, pose.as_row())
             self.latest_pose = pose
+
+    def add_position(self, p):
+        with self.lock:
+            self.latest_position = p
 
     def add_geom(self, g):
         with self.lock:

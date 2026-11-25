@@ -74,9 +74,10 @@ class GeometryConfig:
     # Eixos da PLACA (referencial do IMU), para posicionar a medida no mundo:
     bar_axis: str = "+X"      # sentido do sensor 1 (esquerda) para o sensor 2 (direita)
     toward_axis: str = "-Z"   # sentido para onde os sensores apontam (-Z = para baixo, placa deitada)
-    # Calibração do ToF: valor somado às DUAS leituras (h1 e h2), na mesma unidade delas.
-    # É calculado por solve_offset() a partir de uma altura H conhecida.
-    tof_offset: float = 0.0
+    # Calibração do ToF: valor somado a CADA leitura (h1 e h2), na mesma unidade delas.
+    # Calculados por true_distance() a partir de uma altura H conhecida.
+    tof_offset1: float = 0.0
+    tof_offset2: float = 0.0
 
 
 def config_path():
@@ -97,8 +98,10 @@ def load_config() -> GeometryConfig:
         ba, ta = d.get("bar_axis", cfg.bar_axis), d.get("toward_axis", cfg.toward_axis)
         if axes_ok(ba, ta):
             cfg.bar_axis, cfg.toward_axis = ba, ta
-        off = float(d.get("tof_offset", 0.0))
-        cfg.tof_offset = off if math.isfinite(off) else 0.0
+        old = float(d.get("tof_offset", 0.0))      # arquivo antigo: um offset só para os dois
+        o1, o2 = float(d.get("tof_offset1", old)), float(d.get("tof_offset2", old))
+        cfg.tof_offset1 = o1 if math.isfinite(o1) else 0.0
+        cfg.tof_offset2 = o2 if math.isfinite(o2) else 0.0
         return cfg
     except (OSError, ValueError, KeyError, TypeError):
         return GeometryConfig()
@@ -108,7 +111,8 @@ def save_config(cfg: GeometryConfig) -> str:
     path = config_path()
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"L": cfg.L, "R": cfg.R, "bar_axis": cfg.bar_axis,
-                   "toward_axis": cfg.toward_axis, "tof_offset": cfg.tof_offset}, f, indent=2)
+                   "toward_axis": cfg.toward_axis, "tof_offset1": cfg.tof_offset1,
+                   "tof_offset2": cfg.tof_offset2}, f, indent=2)
     return path
 
 
@@ -175,52 +179,34 @@ def compute(h1: float, h2: float, L: float, R: float) -> GeometryResult:
 
 
 # ------------------------------------------------------------------ calibração
-def solve_offset(h1: float, h2: float, H_known: float, L: float, R: float):
+def true_distance(H_known: float, L: float, R: float):
     """
-    Calibração do ToF a partir de uma altura conhecida.
+    Calibração do ToF: qual leitura os DOIS sensores deveriam ter, se lessem o mesmo valor
+    (α = 0, objeto centrado), quando a altura é H_known.
 
-    Com o objeto numa altura H_known (medida por fora), procura o valor `d` que,
-    somado às DUAS leituras, faz compute(h1 + d, h2 + d, L, R).H == H_known.
-    (Uma altura só determina um parâmetro: o erro comum aos dois sensores, por
-    exemplo a distância entre o sensor e a borda da barra ou o bias do ToF.)
+    Com h1 = h2 = h:  H = (√3/2)·h − F,  F = R − √(R² − ((L − h)/2)²),  e H cresce com h,
+    então a solução é única. Cada sensor recebe o próprio offset: h − leitura_i.
 
-    Retorna (d, "") ou (None, motivo). Se houver mais de uma solução, devolve a
-    de menor |d|.
+    Retorna (h, "") ou (None, motivo).
     """
-    if not (math.isfinite(h1) and math.isfinite(h2) and math.isfinite(H_known)):
-        return None, "leituras inválidas"
-    if H_known <= 0:
+    if not (math.isfinite(H_known) and H_known > 0):
         return None, "a altura conhecida precisa ser positiva"
-    lo = -min(h1, h2) + 1e-6          # h > 0
-    hi = L - (h1 + h2) / 2.0 - 1e-6   # h1 + h2 < 2L
-    if hi <= lo:
-        return None, "leituras incompatíveis com L"
+    lo = max(0.0, L - 2.0 * R) + 1e-6      # corda (L − h) menor que o diâmetro
+    hi = L - 1e-6                          # raios quase se encontrando
 
-    def f(d):
-        r = compute(h1 + d, h2 + d, L, R)
-        return r.H - H_known if r.valid else math.nan
+    def H_at(h):
+        r = compute(h, h, L, R)
+        return r.H if r.valid else math.nan
 
-    n = 2000
-    grid = [lo + (hi - lo) * i / n for i in range(n + 1)]
-    vals = [f(d) for d in grid]
-    roots = []
-    for i in range(n):
-        a, b, fa, fb = grid[i], grid[i + 1], vals[i], vals[i + 1]
-        if math.isnan(fa) or math.isnan(fb):
-            continue
-        if fa == 0.0:
-            roots.append(a)
-        elif fa * fb < 0:
-            for _ in range(60):                       # bisseção
-                m = (a + b) / 2.0
-                fm = f(m)
-                if math.isnan(fm):
-                    break
-                if fa * fm <= 0:
-                    b = m
-                else:
-                    a, fa = m, fm
-            roots.append((a + b) / 2.0)
-    if not roots:
-        return None, "nenhum offset leva essas leituras a essa altura (confira L, R e H)"
-    return min(roots, key=abs), ""
+    H_lo, H_hi = H_at(lo), H_at(hi)
+    if math.isnan(H_lo) or math.isnan(H_hi):
+        return None, "L e R não permitem essa calibração"
+    if not (H_lo <= H_known <= H_hi):
+        return None, f"para esse L e R, H precisa estar entre {H_lo:.1f} e {H_hi:.1f}"
+    for _ in range(80):                    # bisseção
+        mid = (lo + hi) / 2.0
+        if H_at(mid) < H_known:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2.0, ""
