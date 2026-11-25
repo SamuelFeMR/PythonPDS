@@ -1,7 +1,9 @@
-"""gui/dialog_geometry.py — janelinha com L e R (raramente muda)."""
+"""gui/dialog_geometry.py — janelinha com L, R e os eixos da placa (raramente muda)."""
 
 import tkinter as tk
 from tkinter import ttk
+
+import geometry
 
 from . import theme
 
@@ -17,19 +19,27 @@ class GeometryDialog(tk.Toplevel):
         box = ttk.Frame(self, style="Panel.TFrame", padding=14)
         box.pack(fill="both", expand=True)
         cfg = pipeline.geometry_cfg
-        self.vars = {"L": tk.StringVar(value=f"{cfg.L:g}"), "R": tk.StringVar(value=f"{cfg.R:g}")}
+        self.vars = {"L": tk.StringVar(value=f"{cfg.L:g}"), "R": tk.StringVar(value=f"{cfg.R:g}"),
+                     "bar": tk.StringVar(value=cfg.bar_axis), "toward": tk.StringVar(value=cfg.toward_axis)}
 
         for i, (text, key) in enumerate((("L  (distância entre os sensores, mm)", "L"),
                                          ("R  (raio da esfera/cilindro, mm)", "R"))):
             ttk.Label(box, text=text, style="Panel.TLabel").grid(row=i, column=0, sticky="w", pady=3)
             ttk.Entry(box, textvariable=self.vars[key], width=9, justify="right").grid(
                 row=i, column=1, sticky="e", padx=(12, 0))
-        ttk.Label(box, text="Mudar L ou R apaga a calibração do ToF.", style="Muted.TLabel",
-                  wraplength=340, justify="left").grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        for i, (text, key) in enumerate((("Eixo da placa: sensor 1 → sensor 2", "bar"),
+                                         ("Eixo da placa: para onde os sensores olham", "toward")), start=2):
+            ttk.Label(box, text=text, style="Panel.TLabel").grid(row=i, column=0, sticky="w", pady=3)
+            ttk.Combobox(box, textvariable=self.vars[key], values=geometry.AXES,
+                         state="readonly", width=6).grid(row=i, column=1, sticky="e", padx=(12, 0))
+        ttk.Label(box, text="Os eixos são os do IMU. Placa deitada com Z para cima e sensores olhando "
+                            "para baixo = -Z. Mudar L ou R apaga a calibração do ToF.",
+                  style="Muted.TLabel", wraplength=360, justify="left"
+                  ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
         self.msg = ttk.Label(box, text="", style="Muted.TLabel", wraplength=340, justify="left")
-        self.msg.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self.msg.grid(row=5, column=0, columnspan=2, sticky="w", pady=(4, 0))
         row = ttk.Frame(box, style="Panel.TFrame")
-        row.grid(row=4, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        row.grid(row=6, column=0, columnspan=2, sticky="e", pady=(10, 0))
         ttk.Button(row, text="Aplicar e salvar", command=self._apply).pack(side="left")
         ttk.Button(row, text="Fechar", command=self.destroy).pack(side="left", padx=(6, 0))
 
@@ -37,7 +47,8 @@ class GeometryDialog(tk.Toplevel):
         try:
             L = float(self.vars["L"].get().replace(",", "."))
             R = float(self.vars["R"].get().replace(",", "."))
-            self.pipeline.set_geometry(L, R, save=True)
+            self.pipeline.set_geometry(L, R, save=True, bar_axis=self.vars["bar"].get(),
+                                       toward_axis=self.vars["toward"].get())
         except ValueError as e:
             self.msg.configure(text=f"Valor inválido: {e}", foreground=theme.BAD)
         except OSError as e:

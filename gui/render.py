@@ -109,35 +109,47 @@ def _hex(rgb):
 
 @dataclass
 class ToFInfo:
-    """Leitura dos ToF para o texto H / α da cena (dados puros)."""
+    """Leitura dos ToF para posicionar o sensor e escrever H e α (dados puros)."""
     res: object = None            # geometry.GeometryResult válido, ou None
     message: str = ""             # por que não há resultado
+    bar_axis: str = "+X"          # eixo da placa: do sensor 1 (esquerda) para o 2 (direita)
+    toward_axis: str = "-Z"       # eixo da placa: para onde os sensores olham
 
 
-def tilt_deg(R) -> float:
-    """Inclinação: ângulo entre o eixo Z da placa e a vertical (0 = deitada, sem singularidade)."""
-    return float(np.degrees(np.arccos(np.clip(R[2, 2], -1.0, 1.0))))
+def _axis(name):
+    """'+X', '-Z', ... -> vetor unitário no referencial da placa."""
+    v = np.zeros(3)
+    v["XYZ".index(name.strip("+-").upper())] = -1.0 if name.startswith("-") else 1.0
+    return v
 
 
-def sensor_pose(R, position_on: bool):
+def sensor_pose(R, position_on, alpha_deg=0.0, bar=(1.0, 0.0, 0.0), toward=(0.0, 0.0, -1.0)):
     """
-    (centro, matriz de rotação) da placa na cena.
+    Onde a placa aparece na cena: (centro, ponto da superfície, ângulo do polo em graus, limitado).
 
-    Desligado: a placa fica no polo do hemisfério com a orientação real R.
-    Ligado: a placa vai para o meridiano de origem (plano X–Z, lado +X) à distância
-    angular do polo igual à inclinação, e fica TANGENTE à superfície (eixo Z da placa =
-    normal da esfera); só o giro em torno da normal (yaw) vem da orientação real.
+    Desligado: a placa fica acima do polo, com a orientação real R.
+    Ligado: o ponto medido é onde a normal da esfera aponta. No referencial da placa essa
+    normal (da esfera para o sensor) é  sen(α)·barra − cos(α)·direção_dos_sensores;  girada
+    pela orientação R fica no mundo. Placa deitada, sensores para baixo e α = 0 => polo;
+    α ≠ 0 (ou placa inclinada) desloca o ponto para o lado. O giro em torno da vertical
+    (yaw) é retirado: ele não muda onde o sensor está na esfera, só para onde a placa aponta,
+    e assim o ponto não depende do magnetômetro. A placa é desenhada com a orientação real,
+    um pouco acima do ponto. Só existe o hemisfério de cima: abaixo do equador, trava nele.
     """
-    lift = DOME_R + 0.6 * _HALF[2] * BOARD_S * 2
+    lift = DOME_R + 0.5
     if not position_on:
-        return np.array([0.0, 0.0, lift]), R
-    th = np.radians(min(tilt_deg(R), 90.0))
-    n = np.array([np.sin(th), 0.0, np.cos(th)])
-    x = R[:, 0] - (R[:, 0] @ n) * n          # eixo X da placa projetado no plano tangente
-    if np.linalg.norm(x) < 1e-3:
-        x = R[:, 1] - (R[:, 1] @ n) * n
-    x /= np.linalg.norm(x)
-    return n * lift, np.column_stack((x, np.cross(n, x), n))
+        return np.array([0.0, 0.0, lift]), None, 0.0, False
+    yaw = np.arctan2(R[1, 0], R[0, 0])
+    c, s = np.cos(-yaw), np.sin(-yaw)
+    Rz = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+    a = np.radians(alpha_deg)
+    n = Rz @ R @ (np.sin(a) * np.asarray(bar) - np.cos(a) * np.asarray(toward))
+    clamped = n[2] < 0
+    if clamped:
+        n = np.array([n[0], n[1], 0.0])
+        n = n / np.linalg.norm(n) if np.linalg.norm(n) > 1e-9 else np.array([1.0, 0.0, 0.0])
+    polar = float(np.degrees(np.arccos(np.clip(n[2], -1.0, 1.0))))
+    return n * lift, n * DOME_R, polar, clamped
 
 
 def _hull(P):
@@ -207,12 +219,15 @@ def _dome_cmds(proj, cdir):
          "#5a6c96", "#2c3650", 2)
     th = np.radians(np.linspace(0, 90, 31))
     for lon in np.radians(np.arange(30, 360, 30)):
+        if abs(np.sin(lon)) < 1e-9:      # 0° e 180° (plano X–Z) são o meridiano de origem, abaixo
+            continue
         line(DOME_R * np.column_stack((np.sin(th) * np.cos(lon), np.sin(th) * np.sin(lon), np.cos(th))),
              "#34425f", "#232c40")
-    # meridiano de origem (lon 0, lado +X): é por onde o sensor anda
-    line(DOME_R * np.column_stack((np.sin(th), np.zeros_like(th), np.cos(th))),
+    # meridiano de origem (plano X–Z): é por onde o ponto anda quando só o α muda
+    ths = np.radians(np.linspace(-90, 90, 61))
+    line(DOME_R * np.column_stack((np.sin(ths), np.zeros_like(ths), np.cos(ths))),
          theme.WARN, "#6b5a2a", 3)
-    for deg in (0, 30, 60, 90):
+    for deg in (-90, -60, -30, 0, 30, 60, 90):
         a = np.radians(deg)
         n = np.array([np.sin(a), 0.0, np.cos(a)])
         if n @ cdir > -0.1:
@@ -223,9 +238,9 @@ def _dome_cmds(proj, cdir):
 
 def scene_commands(w, h, q, az, el, tof=None, position_on=False):
     """
-    Hemisfério fixo no centro com o sensor sobre ele. `position_on` liga o movimento
-    do sensor ao longo do meridiano de origem (ver sensor_pose). `tof` (ToFInfo) escreve
-    H e α no canto da cena.
+    Hemisfério fixo no centro com o sensor sobre ele. `position_on` posiciona o sensor
+    pela orientação + α dos ToF (ver sensor_pose). `tof` (ToFInfo) dá o α e escreve H e α
+    no canto da cena.
     """
     cdir = np.array([np.cos(el) * np.cos(az), np.cos(el) * np.sin(az), np.sin(el)])
     fwd = -cdir
@@ -240,13 +255,23 @@ def scene_commands(w, h, q, az, el, tof=None, position_on=False):
         return np.column_stack((cx + (P @ right) * s, cy - (P @ cup) * s))
 
     R = Q.to_matrix(q) if q is not None else np.eye(3)
-    center, Rb = sensor_pose(R, position_on)
-    tilt = tilt_deg(R)
+    res = tof.res if tof is not None else None
+    bar = _axis(tof.bar_axis) if tof is not None else np.array([1.0, 0.0, 0.0])
+    toward = _axis(tof.toward_axis) if tof is not None else np.array([0.0, 0.0, -1.0])
+    if np.linalg.norm(np.cross(bar, toward)) < 0.5:
+        bar, toward = np.array([1.0, 0.0, 0.0]), np.array([0.0, 0.0, -1.0])
+    alpha = res.alpha_deg if res is not None else 0.0
+    center, point, polar, clamped = sensor_pose(R, position_on, alpha, bar, toward)
+    Rb = R
 
     dome, back, front = _dome_cmds(proj, cdir)
     board = _board_cmds(proj, center, Rb, cdir)
     in_front = center @ cdir >= 0
     cmds = dome + back + ([] if in_front else board) + front + (board if in_front else [])
+    if point is not None:    # ponto medido na superfície e o fio até a placa
+        (x0, y0), (x1, y1) = proj(np.array([center, point]))
+        cmds.append(("line", [x0, y0, x1, y1], theme.GOOD, 1.5, False, (4, 3)))
+        cmds.append(("oval", x1, y1, 5, theme.GOOD, "#0d0f13"))
 
     # norte (+X) na borda da base
     n0, n1, nt = proj(np.array([(DOME_R + 0.55, 0, 0), (DOME_R + 1.0, 0, 0), (DOME_R + 1.25, 0, 0)]))
@@ -254,7 +279,6 @@ def scene_commands(w, h, q, az, el, tof=None, position_on=False):
     cmds.append(("text", nt[0], nt[1], "N (+X)", theme.WARN, "center", 9, True))
 
     # leitura dos ToF
-    res = tof.res if tof is not None else None
     if res is not None:
         cmds.append(("text", 10, 10, f"H = {res.H:.1f}", theme.GOOD, "nw", 15, True))
         cmds.append(("text", 10, 34, f"α = {res.alpha_deg:+.1f}°", theme.GOOD, "nw", 15, True))
@@ -265,8 +289,12 @@ def scene_commands(w, h, q, az, el, tof=None, position_on=False):
         cmds.append(("text", 10, 10, "H, α: " + msg, theme.WARN, "nw", 9, True))
 
     if position_on:
-        foot = (f"posição ligada · inclinação {min(tilt, 90):.0f}° · "
-                f"altura {100 * np.cos(np.radians(min(tilt, 90))):.0f}% do raio")
+        foot = (f"posição ligada · α {alpha:+.1f}° · a {polar:.0f}° do polo · "
+                f"altura {100 * np.cos(np.radians(polar)):.0f}% do raio")
+        if res is None:
+            foot += " · sem ToF válido: α = 0 assumido"
+        if clamped:
+            foot += " · limitado ao equador"
     else:
         foot = "posição desligada: placa fixa no topo, com a orientação real"
     cmds.append(("text", 8, h - 22, foot, theme.MUTED, "sw", 8, False))

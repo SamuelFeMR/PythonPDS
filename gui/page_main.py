@@ -165,9 +165,11 @@ class MainPage(ttk.Frame):
     # --------------------------------------------------------------- H / α
     def _tof_info(self):
         g = self.store.latest_geom
+        cfg = self.pipeline.geometry_cfg
         if g is None:
-            return ToFInfo(None, "aguardando leitura dos ToF…")
-        return ToFInfo(g.result, "") if g.valid else ToFInfo(None, g.reason)
+            return ToFInfo(None, "aguardando leitura dos ToF…", cfg.bar_axis, cfg.toward_axis)
+        return ToFInfo(g.result if g.valid else None, "" if g.valid else g.reason,
+                       cfg.bar_axis, cfg.toward_axis)
 
     # ------------------------------------------------------------ refresh
     def refresh(self):
