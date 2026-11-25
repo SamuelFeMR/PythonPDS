@@ -10,6 +10,7 @@ orientação, só a "cola".
 
 import os
 import threading
+from collections import deque
 from dataclasses import dataclass
 from typing import Optional
 
@@ -75,6 +76,9 @@ class GeometryState:
         return [self.h1, self.h2, self.alpha_deg, self.H, self.Y]
 
 
+TOF_AVG_N = 5   # amostras da média móvel dos sensores de distância
+
+
 class Pipeline:
     def __init__(self):
         self.lock = threading.RLock()
@@ -98,6 +102,8 @@ class Pipeline:
         # sensores de distância (geometry.py)
         self.geometry_cfg = geometry.load_config()
         self._geo_t0_us: Optional[int] = None
+        self.tof_avg_n = TOF_AVG_N
+        self._tof_win = deque(maxlen=self.tof_avg_n)   # (dist1, dist2)
 
     # -------------------------------------------------------- alinhamento
     def reload_alignment(self):
@@ -160,6 +166,7 @@ class Pipeline:
             self._prev_t_us = None
             self._t0_us = None
             self._geo_t0_us = None
+            self._tof_win.clear()
 
     # ------------------------------------------------- sensores de distância
     def set_geometry(self, L: float, R: float, save: bool = True,
@@ -184,10 +191,16 @@ class Pipeline:
                 self._geo_t0_us = s.t_us
             t = (s.t_us - self._geo_t0_us) * 1e-6
             cfg = self.geometry_cfg
+            if not s.tof_ok:
+                self._tof_win.clear()   # não mistura leituras antigas com as novas
+            else:
+                self._tof_win.append((float(s.dist1), float(s.dist2)))
+                h1, h2 = np.mean(self._tof_win, axis=0)   # média móvel de N amostras
         if not s.tof_ok:
             return GeometryState(t, float(s.dist1), float(s.dist2), False, "ToF inválido (tof_ok = 0)")
-        r = geometry.compute(s.dist1, s.dist2, cfg.L, cfg.R)
-        return GeometryState(t, float(s.dist1), float(s.dist2), r.valid, r.reason, r)
+        h1, h2 = float(h1), float(h2)
+        r = geometry.compute(h1, h2, cfg.L, cfg.R)
+        return GeometryState(t, h1, h2, r.valid, r.reason, r)
 
     # ------------------------------------------------------------ passo
     def process(self, s: Sample) -> Optional[PoseState]:
