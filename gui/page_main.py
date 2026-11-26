@@ -66,8 +66,33 @@ class MainPage(ttk.Frame):
 
     # ------------------------------------------------------------- painel
     def _build_side(self):
-        side = ttk.Frame(self, style="Panel.TFrame", padding=12)
-        side.grid(row=1, column=1, sticky="ns", padx=(4, 8), pady=(8, 4))
+        # painel com barra de rolagem (a janela pode ser menor que o painel)
+        outer = ttk.Frame(self, style="Panel.TFrame")
+        outer.grid(row=1, column=1, sticky="ns", padx=(4, 8), pady=(8, 4))
+        outer.rowconfigure(0, weight=1)
+        canvas = tk.Canvas(outer, bg=theme.PANEL, highlightthickness=0, bd=0)
+        bar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=bar.set)
+        canvas.grid(row=0, column=0, sticky="ns")
+        bar.grid(row=0, column=1, sticky="ns")
+        side = ttk.Frame(canvas, style="Panel.TFrame", padding=12)
+        canvas.create_window((0, 0), window=side, anchor="nw")
+
+        def fit(_e=None):
+            canvas.configure(scrollregion=canvas.bbox("all"), width=side.winfo_reqwidth())
+            if side.winfo_reqheight() <= canvas.winfo_height():
+                canvas.yview_moveto(0)
+        side.bind("<Configure>", fit)
+        canvas.bind("<Configure>", fit)
+
+        def wheel(e):
+            w = outer.winfo_containing(e.x_root, e.y_root)   # só rola com o mouse sobre o painel
+            while w is not None and w is not outer:
+                w = w.master
+            if w is outer and side.winfo_reqheight() > canvas.winfo_height():
+                canvas.yview_scroll(-1 if (e.num == 4 or e.delta > 0) else 1, "units")
+        for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            canvas.bind_all(ev, wheel, add="+")
         side.columnconfigure(0, weight=1, uniform="s")
         side.columnconfigure(1, weight=1, uniform="s")
         r = [0]   # próxima linha da grade
