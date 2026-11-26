@@ -2,9 +2,11 @@
   "filter": "Madgwick (mag só no yaw)",
   "use_mag": true,
   "params": {
-    "beta": 0.07,
-    "mag_rate": 0.02,
-    "accel_tol": 0.25,
-    "mag_tol": 0.3
+    "Madgwick (mag só no yaw)": {
+      "beta": 0.07,
+      "mag_rate": 0.02,
+      "accel_tol": 0.25,
+      "mag_tol": 0.3
+    }
   }
 }

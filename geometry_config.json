@@ -1,8 +1,8 @@
 {
   "L": 186.0,
   "R": 450.0,
-  "bar_axis": "+Y",
+  "bar_axis": "-X",
   "toward_axis": "-Z",
-  "tof_offset1": 0.0,
-  "tof_offset2": 0.0
+  "tof_offset1": 3.7356802767028725,
+  "tof_offset2": -16.624319723297127
 }

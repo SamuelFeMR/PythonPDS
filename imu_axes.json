@@ -1,0 +1,8 @@
+{
+  "map": [
+    "-X",
+    "-Y",
+    "+Z"
+  ],
+  "invert_rotation": false
+}
