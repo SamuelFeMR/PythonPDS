@@ -55,53 +55,18 @@ def sample_stream(ser):
             yield s
 
 
-AXES = ("+X", "-X", "+Y", "-Y", "+Z", "-Z")
-REMAP_NAME = "axes_remap.json"
-SENSORS = ("accel", "gyro", "mag")
-_IDENTITY = ["+X", "+Y", "+Z"]
-
-
-def remap_matrix(names):
-    """["+Y", "+X", "-Z"] -> matriz M tal que saída = M @ bruto
-    (saída X = +Y bruto, saída Y = +X bruto, saída Z = -Z bruto)."""
-    if len(names) != 3 or any(n not in AXES for n in names) or len({n[1] for n in names}) != 3:
-        raise ValueError(f"{list(names)}: use três eixos diferentes de {', '.join(AXES)}")
-    M = np.zeros((3, 3))
-    for row, n in enumerate(names):
-        M[row, "XYZ".index(n[1])] = 1.0 if n[0] == "+" else -1.0
-    return M
-
-
-def load_remap(path):
-    """Lê axes_remap.json -> ({"accel": M, "gyro": M, "mag": M}, mensagem de erro ou "")."""
-    out = {k: np.eye(3) for k in SENSORS}
-    if not path or not os.path.exists(path):
-        return out, ""
-    try:
-        with open(path, encoding="utf-8") as f:
-            d = json.load(f)
-        for k in SENSORS:
-            out[k] = remap_matrix(d.get(k, _IDENTITY))
-        return out, ""
-    except (OSError, ValueError, TypeError, AttributeError) as e:
-        return {k: np.eye(3) for k in SENSORS}, f"{REMAP_NAME} com erro ({e}); eixos sem troca"
-
-
 class Frames:
     """
-    Leva gyro e mag para o referencial do ACELERÔMETRO (a referência) e, por último,
-    aplica a troca manual de eixos de axes_remap.json (remap) a cada sensor:
+    Leva gyro e mag para o referencial do ACELERÔMETRO (a referência).
 
-        gyro' = P_gyro @ (G @ gyro_rad_s)
-        mag'  = P_mag  @ (M @ ((mag - offset) * scale))
-        acc'  = P_accel @ acc
+        gyro' = G @ gyro_rad_s
+        mag'  = M @ ((mag - offset) * scale)
 
     Sem arquivo de configuração: G = I (só graus/s -> rad/s), M = I,
-    offset = 0, scale = 1. Sem remap: P = I.
+    offset = 0, scale = 1.
     """
 
-    def __init__(self, cfg=None, gyro_in_rad=False, remap=None):
-        self.P = remap or {k: np.eye(3) for k in SENSORS}
+    def __init__(self, cfg=None, gyro_in_rad=False):
         base = 1.0 if gyro_in_rad else DEG2RAD
         self.G = np.eye(3) * base
         self.M = np.eye(3)
@@ -115,14 +80,11 @@ class Frames:
             self.scale = np.array(cfg["mag_scale"], dtype=float)
             self.from_file = True
 
-    def accel(self, a_raw):
-        return self.P["accel"] @ a_raw
-
     def gyro(self, g_raw):
-        return self.P["gyro"] @ (self.G @ g_raw)
+        return self.G @ g_raw
 
     def mag(self, m_raw):
-        return self.P["mag"] @ (self.M @ ((m_raw - self.offset) * self.scale))
+        return self.M @ ((m_raw - self.offset) * self.scale)
 
 
 def load_config(path="axes_config.json"):

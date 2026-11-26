@@ -9,7 +9,9 @@ from tkinter import ttk
 from . import theme
 from filters import MODES
 
+from .dialog_axes import AxesDialog
 from .dialog_geometry import GeometryDialog
+from .dialog_params import ParamsDialog
 from .plot_window import PlotWindow
 from .render import ToFInfo
 from .widgets import OrientationView, StripChart
@@ -40,6 +42,8 @@ class MainPage(ttk.Frame):
         self._cal_msg = ""
         self._dialog = None
         self._plots = None
+        self._axes_dlg = None
+        self._params_dlg = None
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
@@ -163,6 +167,11 @@ class MainPage(ttk.Frame):
                    ).grid(row=row, column=0, sticky="we", padx=(0, 3))
         ttk.Button(side, text="Geometria…", command=self._open_geometry
                    ).grid(row=row, column=1, sticky="we", padx=(3, 0))
+        row = nxt()
+        ttk.Button(side, text="Eixos / sentido…", command=self._open_axes
+                   ).grid(row=row, column=0, sticky="we", padx=(0, 3), pady=(4, 0))
+        ttk.Button(side, text="Parâmetros…", command=self._open_params
+                   ).grid(row=row, column=1, sticky="we", padx=(3, 0), pady=(4, 0))
         ttk.Button(side, text="Gráficos…", command=self._open_plots
                    ).grid(row=nxt(), column=0, columnspan=2, sticky="we", pady=(4, 0))
         self.rec_btn = ttk.Button(side, text="● Gravar CSV", command=self._toggle_rec)
@@ -189,7 +198,6 @@ class MainPage(ttk.Frame):
 
     def _reset(self):
         """Reinicia a orientação e relê o filter_config.json."""
-        self.pipeline.reload_alignment()    # axes_remap.json / axes_config.json
         self.pipeline.reload_configs()
         self.pipeline.reset()
         self.mode_var.set(next((lab for lab, n in MODES if n == self.pipeline.filter_name),
@@ -208,6 +216,18 @@ class MainPage(ttk.Frame):
             self.pipeline.set_filter(name)
             self._update_info()
 
+    def _open_axes(self):
+        if self._axes_dlg is not None and self._axes_dlg.winfo_exists():
+            self._axes_dlg.lift()
+            return
+        self._axes_dlg = AxesDialog(self.app, self.pipeline)
+
+    def _open_params(self):
+        if self._params_dlg is not None and self._params_dlg.winfo_exists():
+            self._params_dlg.lift()
+            return
+        self._params_dlg = ParamsDialog(self.app, self.pipeline)
+
     def _open_plots(self):
         if self._plots is not None and self._plots.winfo_exists():
             self._plots.lift()
@@ -225,8 +245,11 @@ class MainPage(ttk.Frame):
         lines = [f"Filtro: {p.filter_name}" + ("" if p.use_mag else " (sem mag)") + " · filter_config.json"]
         if p.filter_message:
             lines.append("⚠ " + p.filter_message)
-        if p.remap_message:
-            lines.append("⚠ " + p.remap_message)
+        if p.imu_axes.message:
+            lines.append("⚠ " + p.imu_axes.message)
+        if not p.imu_axes.is_default:
+            lines.append("Eixos: " + " ".join(p.imu_axes.map) + (" · giro invertido" if p.imu_axes.invert_rotation else "")
+                         + " · imu_axes.json")
         lines.append("axes_config.json: " + ("carregado" if p.alignment_loaded
                                              else "não encontrado (rode check_axes.py)"))
         self.info.configure(text="\n".join(lines))

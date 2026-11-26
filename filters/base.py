@@ -18,6 +18,9 @@ class Param:
     key: str
     label: str
     default: float
+    minimum: float = 0.0
+    maximum: float = 1.0
+    step: float = 0.01
 
 
 @dataclass
@@ -35,6 +38,12 @@ class PoseFilter(ABC):
 
     def __init__(self, **params):
         self.values = {p.key: float(params.get(p.key, p.default)) for p in self.params}
+
+    def set_param(self, key: str, value: float):
+        """Muda um parâmetro com o filtro rodando (vale na próxima amostra)."""
+        if key in self.values:
+            self.values[key] = float(value)
+            self.on_param_changed(key)
 
     def on_param_changed(self, key: str):
         pass

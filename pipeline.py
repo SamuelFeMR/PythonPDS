@@ -18,12 +18,13 @@ import numpy as np
 
 import filter_config
 import geometry
+import imu_axes
 import position
 import sphere_color
 import quaternion as Q
 from filters import FILTERS, FilterInput, make_filter
 from sample import Sample
-from sensor_io import REMAP_NAME, Frames, load_config, load_remap
+from sensor_io import Frames, load_config
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_NAME = "axes_config.json"
@@ -81,6 +82,9 @@ class GeometryState:
 
 TOF_CAL_N = 50   # amostras (~1 s a 50 Hz) usadas na calibração do ToF
 TOF_AVG_N = 5   # amostras da média móvel dos sensores de distância
+CONS_MIN_RATE = np.radians(8.0)   # só avalia giro × acelerômetro acima de 8 °/s
+CONS_DECAY = 0.995                # janela ≈ 200 amostras
+CONS_MIN_ENERGY = 5e-4            # movimento acumulado mínimo para opinar
 
 
 class Pipeline:
@@ -88,7 +92,6 @@ class Pipeline:
         self.lock = threading.RLock()
         self.force_default_frames = False   # usado pela fonte Demo
         self.config_path = None
-        self.remap_message = ""
         self._frames_cfg = Frames(None)
         self.reload_alignment()
 
@@ -99,6 +102,9 @@ class Pipeline:
         self.filter_message = ""
         self.color_cfg = sphere_color.ColorConfig()
         self._fusion = position.LongitudeFusion()   # longitude: orientação + cor
+        self.imu_axes = imu_axes.load()            # troca de eixos / sentido (imu_axes.json)
+        self._cons = np.zeros(3)                   # giro × acelerômetro: Σ d·p, Σ p·p, Σ d·d
+        self._cons_prev = None
         self.reload_configs()
 
         self.gyro_bias = np.zeros(3)
@@ -120,12 +126,9 @@ class Pipeline:
         with self.lock:
             self.config_path = find_file(CONFIG_NAME)
             cfg = load_config(self.config_path) if self.config_path else None
-            remap, self.remap_message = load_remap(find_file(REMAP_NAME))
-            old = self._frames_cfg
-            self._frames_cfg = Frames(cfg, remap=remap)
-            same = all(np.array_equal(old.P[k], remap[k]) for k in remap)
-            if hasattr(self, "gyro_bias") and not same:
-                self.gyro_bias[:] = 0.0    # o bias estava no referencial anterior
+            self._frames_cfg = Frames(cfg)
+            if hasattr(self, "gyro_bias"):
+                self.gyro_bias[:] = 0.0
 
     @property
     def alignment_loaded(self) -> bool:
@@ -156,12 +159,76 @@ class Pipeline:
         if name not in FILTERS:
             return
         cfg = filter_config.load()
-        params = cfg.params if cfg.filter == name else {}
+        params = cfg.all_params.get(name, {})
         with self.lock:
             self.filter_name = name
             self.filter = make_filter(name, **params)
             self._prev_t_us = None
             self._fusion.reset()
+
+    # ------------------------------------------ parâmetros do algoritmo
+    def filter_params(self) -> dict:
+        with self.lock:
+            return dict(self.filter.values)
+
+    def set_filter_param(self, key: str, value: float):
+        with self.lock:
+            self.filter.set_param(key, value)
+
+    def reset_filter_params(self):
+        with self.lock:
+            for p in self.filter.params:
+                self.filter.set_param(p.key, p.default)
+
+    def set_use_mag(self, use: bool):
+        with self.lock:
+            self.use_mag = bool(use)
+
+    def save_filter_config(self) -> str:
+        """Grava filtro atual + parâmetros + use_mag em filter_config.json."""
+        with self.lock:
+            return filter_config.save(self.filter_name, self.use_mag, self.filter.values)
+
+    # ----------------------------------------------- eixos e sentido do IMU
+    def set_axes(self, names, invert_rotation: bool, save: bool = True):
+        """Troca de eixos (vale para acel, giro e mag) e inversão do giro. Levanta ValueError se inválida."""
+        ax = imu_axes.ImuAxes(tuple(names), bool(invert_rotation))
+        ax.matrix()   # valida
+        with self.lock:
+            self.imu_axes = ax
+            self.gyro_bias[:] = 0.0          # o bias estava no referencial anterior
+            self._cons[:] = 0.0
+            self._cons_prev = None
+            self.filter.reset()
+            self._prev_t_us = None
+            self._fusion.reset()
+        if save:
+            imu_axes.save(ax)
+            ax.saved = True
+
+    def _axes(self):
+        """(matriz, sinal do giro); a fonte Demo já vem alinhada."""
+        if self.force_default_frames:
+            return np.eye(3), 1.0
+        return self.imu_axes.matrix(), self.imu_axes.gyro_sign
+
+    def _track_consistency(self, a, w, dt):
+        """Giro e acelerômetro precisam concordar: da/dt = -ω × a. Acumula a correlação."""
+        prev, self._cons_prev = self._cons_prev, a.copy()
+        if prev is None or dt <= 0 or np.linalg.norm(w) < CONS_MIN_RATE:
+            return
+        pred = -np.cross(w, 0.5 * (a + prev)) * dt
+        d = a - prev
+        self._cons = CONS_DECAY * self._cons + (d @ pred, pred @ pred, d @ d)
+
+    def gyro_consistency(self):
+        """Correlação (-1..1) entre o giro e a variação do acelerômetro: + concordam,
+        - o giro está invertido em relação ao acelerômetro. None = ainda sem movimento suficiente."""
+        with self.lock:
+            c0, c1, c2 = self._cons
+        if c1 < CONS_MIN_ENERGY or c2 <= 0:
+            return None
+        return float(c0 / np.sqrt(c1 * c2))
 
     # ------------------------------------------------------- calibração
     def start_gyro_calibration(self, n: int = 200):
@@ -188,6 +255,8 @@ class Pipeline:
             self._tof_win.clear()
             self._tof_cal = None
             self._fusion.reset()
+            self._cons[:] = 0.0
+            self._cons_prev = None
 
     # ------------------------------------------------- sensores de distância
     def set_geometry(self, L: float, R: float, save: bool = True,
@@ -317,7 +386,9 @@ class Pipeline:
                 self._t0_us = s.t_us
 
             frames = self.frames
-            gyro = frames.gyro(s.gyro)
+            P, sign = self._axes()
+            accel = P @ s.accel
+            gyro = sign * (P @ frames.gyro(s.gyro))
 
             if self._calib_target:
                 self._calib_buf.append(gyro.copy())
@@ -334,10 +405,11 @@ class Pipeline:
                     dt = 0.0
             self._prev_t_us = s.t_us
 
-            mag = frames.mag(s.mag) if self.use_mag else np.zeros(3)
+            w = gyro - self.gyro_bias
+            self._track_consistency(accel, w, dt)
+            mag = P @ frames.mag(s.mag) if self.use_mag else np.zeros(3)
 
-            q = self.filter.update(FilterInput(
-                accel=frames.accel(s.accel), gyro=gyro - self.gyro_bias, mag=mag, dt=dt))
+            q = self.filter.update(FilterInput(accel=accel, gyro=w, mag=mag, dt=dt))
 
             q = np.asarray(q, dtype=float)
             tilt = np.degrees(np.arccos(np.clip(Q.to_matrix(q)[2, 2], -1.0, 1.0)))
