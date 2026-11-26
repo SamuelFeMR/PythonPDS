@@ -19,6 +19,7 @@ import numpy as np
 import filter_config
 import geometry
 import imu_axes
+import magcal
 import position
 import sphere_color
 import quaternion as Q
@@ -81,6 +82,7 @@ class GeometryState:
 
 
 TOF_CAL_N = 50   # amostras (~1 s a 50 Hz) usadas na calibração do ToF
+MAG_CAPTURE_MAX = 20000   # leituras do mag guardadas na captura (≈ 6 min a 50 Hz)
 TOF_AVG_N = 5   # amostras da média móvel dos sensores de distância
 CONS_MIN_RATE = np.radians(8.0)   # só avalia giro × acelerômetro acima de 8 °/s
 CONS_DECAY = 0.995                # janela ≈ 200 amostras
@@ -105,6 +107,9 @@ class Pipeline:
         self.imu_axes = imu_axes.load()            # troca de eixos / sentido (imu_axes.json)
         self._cons = np.zeros(3)                   # giro × acelerômetro: Σ d·p, Σ p·p, Σ d·d
         self._cons_prev = None
+        self.mag_cal, self.mag_cal_message = magcal.load()   # hard/soft iron (mag_calibration.json)
+        self._mag_buf = []
+        self._mag_capturing = False
         self.reload_configs()
 
         self.gyro_bias = np.zeros(3)
@@ -188,6 +193,42 @@ class Pipeline:
         """Grava filtro atual + parâmetros + use_mag em filter_config.json."""
         with self.lock:
             return filter_config.save(self.filter_name, self.use_mag, self.filter.values)
+
+    # -------------------------------------- calibração do magnetômetro
+    def mag_capture_start(self):
+        with self.lock:
+            self._mag_buf = []
+            self._mag_capturing = True
+
+    def mag_capture_stop(self) -> int:
+        with self.lock:
+            self._mag_capturing = False
+            return len(self._mag_buf)
+
+    def mag_capture_points(self) -> np.ndarray:
+        with self.lock:
+            return np.array(self._mag_buf, dtype=float).reshape(-1, 3)
+
+    @property
+    def mag_capturing(self) -> bool:
+        return self._mag_capturing
+
+    def fit_mag(self, method: str = "ellipsoid") -> "magcal.MagCal":
+        """Ajusta o elipsoide com o que foi capturado (não aplica). ValueError se faltar dado."""
+        return magcal.fit(magcal.thin(self.mag_capture_points()), method)
+
+    def set_mag_cal(self, cal, save: bool = True):
+        """Aplica a calibração (None = remove e apaga o arquivo)."""
+        with self.lock:
+            self.mag_cal = cal
+            self.mag_cal_message = ""
+            self.filter.reset()       # o módulo do campo mudou: o filtro reinicia
+            self._prev_t_us = None
+        if save:
+            if cal is None:
+                magcal.delete()
+            else:
+                magcal.save(cal)
 
     # ----------------------------------------------- eixos e sentido do IMU
     def set_axes(self, names, invert_rotation: bool, save: bool = True):
@@ -407,7 +448,14 @@ class Pipeline:
 
             w = gyro - self.gyro_bias
             self._track_consistency(accel, w, dt)
-            mag = P @ frames.mag(s.mag) if self.use_mag else np.zeros(3)
+            if self._mag_capturing and np.any(s.mag) and len(self._mag_buf) < MAG_CAPTURE_MAX:
+                self._mag_buf.append(s.mag.copy())          # bruto, antes de qualquer correção
+            if not self.use_mag:
+                mag = np.zeros(3)
+            elif self.mag_cal is not None:      # hard/soft iron no lugar de offset/scale do axes_config
+                mag = P @ (frames.M @ self.mag_cal.apply(s.mag))
+            else:
+                mag = P @ frames.mag(s.mag)
 
             q = self.filter.update(FilterInput(accel=accel, gyro=w, mag=mag, dt=dt))
 
