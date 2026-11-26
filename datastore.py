@@ -43,13 +43,11 @@ class RingBuffer:
 
 
 class DataStore:
-    RAW_COLS = 14   # ver sample.RAW_COLUMNS
     POSE_COLS = 9   # roll, pitch, yaw, tilt, qw, qx, qy, qz, |a|
     GEOM_COLS = 5   # h1, h2, alpha, H, Y  (só amostras válidas)
 
     def __init__(self):
         self.lock = threading.Lock()
-        self.raw = RingBuffer(self.RAW_COLS)
         self.pose = RingBuffer(self.POSE_COLS)
         self.geom = RingBuffer(self.GEOM_COLS)
         # histórico de TODAS as grandezas (quantities.py) para gráficos: ~12 min a 50 Hz
@@ -69,7 +67,6 @@ class DataStore:
     # ----------------------------------------------------------- escrita
     def clear(self):
         with self.lock:
-            self.raw.clear()
             self.pose.clear()
             self.geom.clear()
             self.history.clear()
@@ -88,14 +85,12 @@ class DataStore:
         with self.lock:
             if self.t0_us is None:
                 self.t0_us = s.t_us
-            t = (s.t_us - self.t0_us) * 1e-6
             if self._prev_t_us is not None:
                 dt = (s.t_us - self._prev_t_us) * 1e-6
                 if 0 < dt < 1:
                     inst = 1.0 / dt
                     self.rate_hz = inst if self.rate_hz == 0 else 0.9 * self.rate_hz + 0.1 * inst
             self._prev_t_us = s.t_us
-            self.raw.append(t, s.raw_row())
             self.latest_sample = s
             self.valid += 1
 
@@ -131,10 +126,6 @@ class DataStore:
         self.error = text
 
     # ----------------------------------------------------------- leitura
-    def snapshot_raw(self, window_s: float):
-        with self.lock:
-            return self.raw.window(window_s)
-
     def snapshot_pose(self, window_s: float):
         with self.lock:
             return self.pose.window(window_s)

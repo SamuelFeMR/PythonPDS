@@ -59,9 +59,9 @@ class ComplementaryFilter(PoseFilter):
     description = ("Integra o giroscópio e puxa devagar a vertical para o acelerômetro "
                    "(roll/pitch) e o yaw para o magnetômetro. Ganho fixo, sem gradiente.")
     params = (
-        Param("gain", "ganho acel (1/s)", 1.0, 0.0, 10.0, 0.05),
-        Param("mag_rate", "mag_rate (1/s)", 0.02, 0.0, 0.3, 0.005),
-        Param("accel_tol", "tolerância |a| (0 = off)", 0.25, 0.0, 0.5, 0.01),
+        Param("gain", "ganho acel (1/s)", 1.0),
+        Param("mag_rate", "mag_rate (1/s)", 0.02),
+        Param("accel_tol", "tolerância |a| (0 = off)", 0.25),
     )
 
     def __init__(self, **params):

@@ -97,11 +97,6 @@ class Position:
         r = self.radius_mm
         return (r * math.sin(th) * math.cos(lam), r * math.sin(th) * math.sin(lam), r * math.cos(th))
 
-    @property
-    def height_ratio(self) -> float:
-        """Altura do ponto como fração do raio (cos do ângulo polar)."""
-        return math.cos(math.radians(self.polar_deg))
-
     def display_rotation(self, R: np.ndarray) -> np.ndarray:
         """Orientação da placa no referencial da esfera (a real, girada de yaw_shift)."""
         return rotate_z(self.yaw_shift_deg) @ R

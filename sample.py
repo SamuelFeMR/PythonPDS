@@ -15,10 +15,6 @@ import numpy as np
 
 N_FIELDS = 18
 
-# Colunas do buffer de dados brutos (ordem usada pela página "Dados brutos")
-RAW_COLUMNS = ["ax", "ay", "az", "gx", "gy", "gz", "mx", "my", "mz",
-               "dist1", "dist2", "red", "green", "blue"]
-
 
 @dataclass
 class Sample:
@@ -34,11 +30,6 @@ class Sample:
     imu_ok: bool
     tof_ok: bool
     color_ok: bool
-
-    def raw_row(self) -> np.ndarray:
-        return np.array([*self.accel, *self.gyro, *self.mag,
-                         self.dist1, self.dist2,
-                         self.red, self.green, self.blue], dtype=float)
 
 
 def parse_sample(line: str) -> Optional[Sample]:

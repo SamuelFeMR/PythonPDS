@@ -51,10 +51,10 @@ class MadgwickYawFilter(_MadgwickBase):
                    "estiver bem calibrado.")
     mag_mode = "yaw"
     params = (
-        Param("beta", "beta (ganho acel)", 0.1, 0.0, 0.5, 0.005),
-        Param("mag_rate", "mag_rate (1/s)", 0.02, 0.0, 0.3, 0.005),
-        Param("accel_tol", "tolerância |a| (0 = off)", 0.25, 0.0, 0.5, 0.01),
-        Param("mag_tol", "tolerância |m| (0 = off)", 0.3, 0.0, 0.5, 0.01),
+        Param("beta", "beta (ganho acel)", 0.1),
+        Param("mag_rate", "mag_rate (1/s)", 0.02),
+        Param("accel_tol", "tolerância |a| (0 = off)", 0.25),
+        Param("mag_tol", "tolerância |m| (0 = off)", 0.3),
     )
 
 
@@ -64,7 +64,7 @@ class MadgwickMargFilter(_MadgwickBase):
                    "Sensível a magnetômetro mal calibrado.")
     mag_mode = "marg"
     params = (
-        Param("beta", "beta (ganho)", 0.1, 0.0, 0.5, 0.005),
-        Param("accel_tol", "tolerância |a| (0 = off)", 0.25, 0.0, 0.5, 0.01),
-        Param("mag_tol", "tolerância |m| (0 = off)", 0.3, 0.0, 0.5, 0.01),
+        Param("beta", "beta (ganho)", 0.1),
+        Param("accel_tol", "tolerância |a| (0 = off)", 0.25),
+        Param("mag_tol", "tolerância |m| (0 = off)", 0.3),
     )

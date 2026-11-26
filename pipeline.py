@@ -86,7 +86,6 @@ TOF_AVG_N = 5   # amostras da média móvel dos sensores de distância
 class Pipeline:
     def __init__(self):
         self.lock = threading.RLock()
-        self.align_enabled = True
         self.force_default_frames = False   # usado pela fonte Demo
         self.config_path = None
         self._frames_cfg = Frames(None)
@@ -130,14 +129,9 @@ class Pipeline:
 
     @property
     def frames(self) -> Frames:
-        if self.align_enabled and not self.force_default_frames:
+        if not self.force_default_frames:
             return self._frames_cfg
         return Frames(None)
-
-    def set_align_enabled(self, enabled: bool):
-        with self.lock:
-            self.align_enabled = bool(enabled)
-            self.gyro_bias[:] = 0.0   # o bias estava no referencial anterior
 
     # ------------------------------------------------------------- filtro
     def reload_configs(self):

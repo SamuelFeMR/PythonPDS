@@ -136,9 +136,5 @@ class DemoSource:
         n = self.rng.normal(0, 0.4, 2)                               # ruído do ToF (mm)
         return max(1, int(round(h1 + n[0]))), max(1, int(round(h2 + n[1])))
 
-    @property
-    def truth_q(self):
-        return self.q.copy()
-
     def close(self):
         pass
