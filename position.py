@@ -91,6 +91,11 @@ class Position:
     def below_equator(self) -> bool:
         return self.polar_deg > 90.0
 
+    @property
+    def height_ratio(self) -> float:
+        """Altura do ponto como fração do raio (cos do ângulo polar)."""
+        return math.cos(math.radians(self.polar_deg))
+
     def cartesian(self):
         """(x, y, z) em mm com origem no centro da esfera; Z para cima."""
         th, lam = math.radians(self.polar_deg), math.radians(self.azimuth_deg)
