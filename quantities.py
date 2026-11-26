@@ -31,6 +31,9 @@ QUANTITIES = (
     Quantity("lon", "longitude (fundida)", "°", "Posição na esfera"),
     Quantity("lon_cor", "longitude (só cor)", "°", "Posição na esfera"),
     Quantity("delta", "Δ mundo→esfera", "°", "Posição na esfera"),
+    Quantity("px", "x (centro da esfera)", "mm", "Posição na esfera"),
+    Quantity("py", "y (centro da esfera)", "mm", "Posição na esfera"),
+    Quantity("pz", "z (centro da esfera)", "mm", "Posição na esfera"),
     Quantity("alpha", "α (ângulo de ataque)", "°", "Sensores de distância"),
     Quantity("H", "H", "mm", "Sensores de distância"),
     Quantity("Y", "Y (corda)", "mm", "Sensores de distância"),
@@ -77,6 +80,8 @@ def row(s, pose, geom, pos) -> np.ndarray:
             v.update(alpha=geom.alpha_deg, H=geom.H, Y=geom.Y)
     if pos is not None:
         v.update(polar=pos.polar_deg, lon=pos.azimuth_deg, delta=pos.yaw_shift_deg)
+        if np.isfinite(pos.radius_mm):
+            v.update(zip(('px', 'py', 'pz'), pos.cartesian()))
         if pos.lon_color_deg is not None:
             v.update(lon_cor=pos.lon_color_deg)
     return np.array([float(v[k]) for k in KEYS])

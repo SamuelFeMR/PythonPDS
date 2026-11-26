@@ -85,10 +85,17 @@ class Position:
     lon_source: str = "imu"       # origem do azimute: "fusão", "discordante" (cor descartada) ou "imu"
     yaw_shift_deg: float = 0.0    # giro (em torno de Z) que leva o mundo ao referencial da esfera
     lon_color_deg: object = None  # longitude lida na cor neste instante (None = sem cor válida)
+    radius_mm: float = float('nan')   # raio da esfera (distância do centro ao ponto)
 
     @property
     def below_equator(self) -> bool:
         return self.polar_deg > 90.0
+
+    def cartesian(self):
+        """(x, y, z) em mm com origem no centro da esfera; Z para cima."""
+        th, lam = math.radians(self.polar_deg), math.radians(self.azimuth_deg)
+        r = self.radius_mm
+        return (r * math.sin(th) * math.cos(lam), r * math.sin(th) * math.sin(lam), r * math.cos(th))
 
     @property
     def height_ratio(self) -> float:

@@ -7,6 +7,8 @@ import tkinter as tk
 from tkinter import ttk
 
 from . import theme
+from filters import MODES
+
 from .dialog_geometry import GeometryDialog
 from .plot_window import PlotWindow
 from .render import ToFInfo
@@ -78,15 +80,36 @@ class MainPage(ttk.Frame):
             ttk.Label(side, text=text, style="H.TLabel").grid(
                 row=nxt(), column=0, columnspan=2, sticky="w", pady=(10 if r[0] else 0, 2))
 
+        header("MÉTODO DE ORIENTAÇÃO")
+        self.mode_var = tk.StringVar()
+        labels = [lab for lab, _ in MODES]
+        cur = next((lab for lab, n in MODES if n == self.pipeline.filter_name), self.pipeline.filter_name)
+        self.mode_var.set(cur)
+        box = ttk.Combobox(side, textvariable=self.mode_var, values=labels + ([cur] if cur not in labels else []),
+                           state="readonly", width=32)
+        box.grid(row=nxt(), column=0, columnspan=2, sticky="we")
+        box.bind("<<ComboboxSelected>>", self._on_mode)
+
         header("POSE")
         self.vars = {}
         row = nxt()
-        for i, key in enumerate(("roll", "pitch", "yaw", "tilt", "polo", "lon", "cor", "delta")):
+        for i, key in enumerate(("roll", "pitch", "yaw", "tilt")):
             v = tk.StringVar(value=f"{key:<5} —")
             ttk.Label(side, textvariable=v, style="Mono.TLabel").grid(
                 row=row + i // 2, column=i % 2, sticky="w")
             self.vars[key] = v
-        nxt(), nxt(), nxt()   # 4 linhas: roll/pitch, yaw/tilt, polo/lon, cor/Δ
+        nxt(), nxt()
+
+        header("POSIÇÃO NA ESFERA (centro = origem)")
+        row = nxt()
+        for i, key in enumerate(("r", "theta", "phi", "cor", "x", "y", "z", "delta")):
+            v = tk.StringVar(value=f"{key:<5} —")
+            ttk.Label(side, textvariable=v, style="Mono.TLabel").grid(
+                row=row + i // 2, column=i % 2, sticky="w")
+            self.vars[key] = v
+        nxt(), nxt(), nxt()   # 4 linhas: r/θ, φ/cor, x/y, z/Δ
+        self.pos_note = ttk.Label(side, text="", style="Muted.TLabel", wraplength=250, justify="left")
+        self.pos_note.grid(row=nxt(), column=0, columnspan=2, sticky="w")
         self.pos_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(side, text="Posição do sensor RGB na esfera", variable=self.pos_var
                         ).grid(row=nxt(), column=0, columnspan=2, sticky="w", pady=(6, 0))
@@ -143,6 +166,8 @@ class MainPage(ttk.Frame):
         """Reinicia a orientação e relê o filter_config.json."""
         self.pipeline.reload_configs()
         self.pipeline.reset()
+        self.mode_var.set(next((lab for lab, n in MODES if n == self.pipeline.filter_name),
+                               self.pipeline.filter_name))
         self._update_info()
 
     def _open_geometry(self):
@@ -150,6 +175,12 @@ class MainPage(ttk.Frame):
             self._dialog.lift()
             return
         self._dialog = GeometryDialog(self.app, self.pipeline)
+
+    def _on_mode(self, _event=None):
+        name = dict(MODES).get(self.mode_var.get())
+        if name:
+            self.pipeline.set_filter(name)
+            self._update_info()
 
     def _open_plots(self):
         if self._plots is not None and self._plots.winfo_exists():
@@ -201,13 +232,21 @@ class MainPage(ttk.Frame):
             r, p, y = pose.euler_deg
             for key, val in (("roll", r), ("pitch", p), ("yaw", y), ("tilt", pose.tilt_deg)):
                 self.vars[key].set(f"{key:<5}{val:+7.1f}°")
-        if pos:   # ponto na esfera: polo = orientação × α, lon = cor da esfera
-            self.vars["polo"].set(f"polo {pos.polar_deg:7.1f}°")
+        if pos:   # ponto na esfera: coordenadas polares com origem no centro da esfera
+            self.vars["r"].set(f"r  {pos.radius_mm:7.1f}mm")
+            self.vars["theta"].set(f"θ  {pos.polar_deg:7.1f}°")
             tag = {"fusão": "fus", "discordante": "dis", "imu": "imu"}[pos.lon_source]
-            self.vars["lon"].set(f"lon {pos.azimuth_deg:6.1f}° {tag}")
+            self.vars["phi"].set(f"φ  {pos.azimuth_deg:6.1f}° {tag}")
             c = pos.lon_color_deg
             self.vars["cor"].set(f"cor {c:6.1f}°" if c is not None else "cor      —")
+            x, y, z = pos.cartesian()
+            self.vars["x"].set(f"x {x:+7.1f}")
+            self.vars["y"].set(f"y {y:+7.1f}")
+            self.vars["z"].set(f"z {z:+7.1f}")
             self.vars["delta"].set(f"Δ {pos.yaw_shift_deg:+7.1f}°")
+            self.pos_note.configure(text="θ = ângulo a partir do polo (0° topo, 90° equador); "
+                                         "φ = longitude; r = raio" +
+                                         ("\n⚠ abaixo do equador" if pos.below_equator else ""))
 
         t, d = self.store.snapshot_pose(WINDOW_S)
         self.chart.update_data(t, d[:, :4] if len(t) else d, WINDOW_S)

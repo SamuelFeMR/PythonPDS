@@ -21,7 +21,7 @@ import geometry
 import position
 import sphere_color
 import quaternion as Q
-from filters import FilterInput, make_filter
+from filters import FILTERS, FilterInput, make_filter
 from sample import Sample
 from sensor_io import Frames, load_config
 
@@ -153,6 +153,18 @@ class Pipeline:
             self.filter_message = "; ".join(m for m in (cfg.message, self.color_cfg.message) if m)
             self._prev_t_us = None
 
+    def set_filter(self, name: str):
+        """Troca o método de orientação ao vivo (parâmetros do filter_config.json só se forem desse filtro)."""
+        if name not in FILTERS:
+            return
+        cfg = filter_config.load()
+        params = cfg.params if cfg.filter == name else {}
+        with self.lock:
+            self.filter_name = name
+            self.filter = make_filter(name, **params)
+            self._prev_t_us = None
+            self._fusion.reset()
+
     # ------------------------------------------------------- calibração
     def start_gyro_calibration(self, n: int = 200):
         with self.lock:
@@ -241,7 +253,9 @@ class Pipeline:
         min_polar = max(5.0, sphere_color.pole_cap_deg(cfg.R, ccfg))
         with self.lock:
             lon, src, _ = self._fusion.update(pose.t_s, pos.azimuth_deg, pos.polar_deg, lon_c, min_polar)
-        return position.with_longitude(pos, lon, src, lon_c)
+        pos = position.with_longitude(pos, lon, src, lon_c)
+        pos.radius_mm = float(cfg.R)
+        return pos
 
     # ------------------------------------------------- calibração do ToF
     def start_tof_calibration(self, H_known: float) -> str:
