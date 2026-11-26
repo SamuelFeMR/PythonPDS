@@ -6,7 +6,7 @@ com moldura) e exportação dos dados. Sem interface: só matplotlib (Figure, se
 serve tanto para a janela quanto para scripts:
 
     t, x = store.snapshot_history(30)
-    cols = plotting.columns(t, x)
+    cols = plotting.columns(x)
     fig = plotting.build_figure(t, cols, ["roll", "pitch"], mode="stacked")
     plotting.save_figure(fig, "pose.png")
     plotting.export_data("pose.csv", t, cols, ["roll", "pitch"])      # ou .mat
@@ -29,7 +29,7 @@ GRAPH_FORMATS = (".png", ".jpg", ".pdf", ".svg", ".eps")
 MODES = ("overlay", "stacked")      # sobrepor numa só / um eixo por grandeza (subplot)
 
 
-def columns(t, x) -> dict:
+def columns(x) -> dict:
     """Matriz do histórico -> {chave: vetor}."""
     return {k: x[:, i] for i, k in enumerate(quantities.KEYS)}
 
@@ -110,7 +110,7 @@ def build_figure(t, cols: dict, keys, mode: str = "overlay", title: str = "",
 
 def save_figure(fig: Figure, path: str, dpi: int = 200) -> str:
     """Salva o gráfico; o formato vem da extensão (padrão .png). Retorna o caminho final."""
-    root, ext = os.path.splitext(path)
+    ext = os.path.splitext(path)[1]
     if ext.lower() not in GRAPH_FORMATS:
         path, ext = path + ".png", ".png"
     fig.savefig(path, dpi=dpi, facecolor="white", bbox_inches="tight")
@@ -120,8 +120,7 @@ def save_figure(fig: Figure, path: str, dpi: int = 200) -> str:
 def export_data(path: str, t, cols: dict, keys) -> str:
     """Salva as grandezas escolhidas (e o tempo) em .csv ou .mat. Retorna o caminho final."""
     keys = [k for k in keys if k in quantities.BY_KEY]
-    root, ext = os.path.splitext(path)
-    ext = ext.lower()
+    ext = os.path.splitext(path)[1].lower()
     t = np.asarray(t, float)
     if ext == ".mat":
         try:

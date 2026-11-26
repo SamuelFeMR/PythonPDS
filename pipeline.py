@@ -23,15 +23,15 @@ import sphere_color
 import quaternion as Q
 from filters import FILTERS, FilterInput, make_filter
 from sample import Sample
-from sensor_io import Frames, load_config
+from sensor_io import REMAP_NAME, Frames, load_config, load_remap
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_NAME = "axes_config.json"
 
 
-def find_config():
+def find_file(name):
     for folder in (os.getcwd(), APP_DIR):
-        path = os.path.join(folder, CONFIG_NAME)
+        path = os.path.join(folder, name)
         if os.path.exists(path):
             return path
     return None
@@ -88,6 +88,7 @@ class Pipeline:
         self.lock = threading.RLock()
         self.force_default_frames = False   # usado pela fonte Demo
         self.config_path = None
+        self.remap_message = ""
         self._frames_cfg = Frames(None)
         self.reload_alignment()
 
@@ -117,11 +118,14 @@ class Pipeline:
     # -------------------------------------------------------- alinhamento
     def reload_alignment(self):
         with self.lock:
-            self.config_path = find_config()
+            self.config_path = find_file(CONFIG_NAME)
             cfg = load_config(self.config_path) if self.config_path else None
-            self._frames_cfg = Frames(cfg)
-            if hasattr(self, "gyro_bias"):
-                self.gyro_bias[:] = 0.0
+            remap, self.remap_message = load_remap(find_file(REMAP_NAME))
+            old = self._frames_cfg
+            self._frames_cfg = Frames(cfg, remap=remap)
+            same = all(np.array_equal(old.P[k], remap[k]) for k in remap)
+            if hasattr(self, "gyro_bias") and not same:
+                self.gyro_bias[:] = 0.0    # o bias estava no referencial anterior
 
     @property
     def alignment_loaded(self) -> bool:
@@ -333,7 +337,7 @@ class Pipeline:
             mag = frames.mag(s.mag) if self.use_mag else np.zeros(3)
 
             q = self.filter.update(FilterInput(
-                accel=s.accel.copy(), gyro=gyro - self.gyro_bias, mag=mag, dt=dt))
+                accel=frames.accel(s.accel), gyro=gyro - self.gyro_bias, mag=mag, dt=dt))
 
             q = np.asarray(q, dtype=float)
             tilt = np.degrees(np.arccos(np.clip(Q.to_matrix(q)[2, 2], -1.0, 1.0)))

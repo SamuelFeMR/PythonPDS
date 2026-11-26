@@ -98,7 +98,7 @@ class PlotWindow(tk.Toplevel):
 
     def _data(self, whole=False):
         t, x = self.store.snapshot_history(1e12 if whole else self._window())
-        return t, plotting.columns(t, x)
+        return t, plotting.columns(x)
 
     def redraw(self):
         t, cols = self._data()

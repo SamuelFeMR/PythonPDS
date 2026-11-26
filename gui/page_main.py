@@ -189,6 +189,7 @@ class MainPage(ttk.Frame):
 
     def _reset(self):
         """Reinicia a orientação e relê o filter_config.json."""
+        self.pipeline.reload_alignment()    # axes_remap.json / axes_config.json
         self.pipeline.reload_configs()
         self.pipeline.reset()
         self.mode_var.set(next((lab for lab, n in MODES if n == self.pipeline.filter_name),
@@ -224,6 +225,8 @@ class MainPage(ttk.Frame):
         lines = [f"Filtro: {p.filter_name}" + ("" if p.use_mag else " (sem mag)") + " · filter_config.json"]
         if p.filter_message:
             lines.append("⚠ " + p.filter_message)
+        if p.remap_message:
+            lines.append("⚠ " + p.remap_message)
         lines.append("axes_config.json: " + ("carregado" if p.alignment_loaded
                                              else "não encontrado (rode check_axes.py)"))
         self.info.configure(text="\n".join(lines))

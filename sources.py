@@ -122,7 +122,6 @@ class DemoSource:
         ox = L / 2 + 0.45 * R * np.sin(0.5 * t)                     # deslocamento lateral
         oz = R + 0.5 * L + 0.1 * L * np.sin(0.31 * t + 1.0)         # distância ao cilindro
         O = np.array([ox, oz])
-        self.truth_center = O
 
         def hit(p0, d):
             w = p0 - O

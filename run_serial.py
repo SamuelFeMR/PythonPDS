@@ -53,7 +53,7 @@ def main():
         if args.calib > 0:
             print(f"Calibrando gyro: mantenha o sensor PARADO ({args.calib} amostras)...")
             buf = []
-            for t_us, a, g, m, ok in stream:
+            for _, _, g, _, ok in stream:
                 if ok:
                     buf.append(frames.gyro(g))
                 if len(buf) >= args.calib:
