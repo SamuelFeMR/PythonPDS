@@ -1,8 +1,8 @@
 """
 filters/madgwick_filter.py
 
-Adaptadores do filtro de Madgwick (madgwick.py) para a interface PoseFilter.
-Se o filtro estiver errado, o conserto é em madgwick.py / quaternion.py.
+Adaptadores do filtro de Madgwick (madgwick.py, que usa a biblioteca AHRS) para a
+interface PoseFilter.
 
 Dois filtros:
   - "Madgwick (mag só no yaw)": acelerômetro corrige roll/pitch; o magnetômetro

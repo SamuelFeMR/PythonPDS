@@ -1,31 +1,43 @@
 """
 madgwick.py
 
-Filtro de Madgwick (MARG) simples, só com quaternions.
+Filtro de Madgwick usando a biblioteca AHRS (https://github.com/Mayitzin/ahrs,
+`pip install ahrs`). A biblioteca faz o passo do filtro (giroscópio + gradiente
+descendente com acelerômetro, e magnetômetro no modo MARG); aqui ficam só:
 
-Passos de cada update (Madgwick et al., 2011):
-  0. Inicialização da atitude (primeira amostra) com acel + mag.
-  1. Derivada do quaternion pelo giroscópio:  q_dot = 0.5 * q ⊗ [0, w]
-  2. Função objetivo: erro entre o que o quaternion ATUAL prevê para a
-     gravidade e para o campo magnético (no referencial do sensor) e o que
-     os sensores MEDIRAM.
-         f = [ q* ⊗ g_ref ⊗ q - a ,  q* ⊗ b_ref ⊗ q - m ]
-  3. Gradiente  J^T f  e normalização do gradiente.
-  4. Fusão:  q_dot = q_dot_gyro - beta * gradiente_normalizado
-  5. Integração:  q = normalize(q + q_dot * dt)
+  * a atitude inicial (TRIAD: vertical do acelerômetro + horizontal do mag);
+  * a rejeição de medidas ruins (|a| longe de 1 g, |m| longe da média recente);
+  * o modo "yaw": o magnetômetro corrige SÓ a guinada, devagar (mag_rate).
 
-Referência magnética (b): o campo medido é levado para navegação,
-h = q ⊗ m ⊗ q*, e a referência fica  b = [|h_xy|, 0, h_z]  (norte em +X).
-Isso elimina o efeito da inclinação magnética e de distorções que
-apontariam o erro para roll/pitch.
-
-Unidades: gyro em rad/s. Acel e mag podem estar em qualquer unidade
-(são normalizados).
+Convenções (iguais às da biblioteca): quaternion [w, x, y, z] do sensor para a
+navegação, X = norte, Y = oeste, Z = para cima; gyro em rad/s; acel e mag em
+qualquer unidade (a biblioteca normaliza).
 """
 
 import numpy as np
 
 import quaternion as Q
+
+try:
+    from ahrs.filters import Madgwick as _AhrsMadgwick
+except ImportError as e:      # mensagem clara em vez de um traceback longo
+    raise ImportError("Falta a biblioteca AHRS. Instale com:  pip install ahrs") from e
+
+
+def triad(accel, mag):
+    """Atitude a partir de uma amostra: vertical do acelerômetro + horizontal do mag."""
+    up_b = Q.normalize(np.asarray(accel, dtype=float))
+    m = np.asarray(mag, dtype=float)
+    if np.linalg.norm(m) < 1e-9:
+        # Sem magnetômetro: usa o eixo X do sensor como "norte" provisório
+        # (ou o Y, se o X estiver alinhado com a vertical). Yaw inicial = 0.
+        m = np.array([1.0, 0.0, 0.0])
+        if abs(np.dot(m, up_b)) > 0.99:
+            m = np.array([0.0, 1.0, 0.0])
+    north_b = Q.normalize(m - np.dot(m, up_b) * up_b)     # campo projetado no plano horizontal
+    west_b = Q.normalize(np.cross(up_b, north_b))
+    # Linhas = norte, oeste e vertical vistos pelo sensor  ->  matriz sensor -> navegação
+    return Q.from_matrix(np.vstack((north_b, west_b, up_b)))
 
 
 class Madgwick:
@@ -34,32 +46,34 @@ class Madgwick:
         """
         beta:      ganho do filtro (rad/s). Maior -> segue mais o acelerômetro
                    (mais rápido, mais ruído). Menor -> confia mais no giroscópio.
-        mag_mode:  como o magnetômetro entra no filtro:
-                     "marg" -> Madgwick MARG original (gradiente normalizado).
-                               Problema: com o sensor parado o acelerômetro já
-                               está satisfeito, então QUALQUER discordância do
-                               magnetômetro puxa o yaw com a força total (beta),
-                               mesmo que seja um erro pequeno ou de calibração.
-                     "yaw"  -> o acelerômetro corrige roll/pitch (Madgwick IMU) e
-                               o magnetômetro corrige SÓ o yaw, de forma
-                               proporcional ao erro e com taxa limitada
-                               (mag_rate). Muito mais estável com mag imperfeito.
-        mag_rate:  (modo "yaw") taxa da correção de yaw, em 1/s. Constante de
-                   tempo = 1/mag_rate. 0 desliga o magnetômetro.
-        accel_tol: tolerância relativa de |a| em torno de 1 g. Fora dela
-                   (movimento forte, vibração) o acelerômetro é ignorado naquele
-                   passo e o giroscópio assume. 0 desliga a rejeição.
-        mag_tol:   tolerância relativa de |m| em relação à média recente. Fora
-                   dela (perturbação magnética) o magnetômetro é ignorado.
-                   0 desliga a rejeição.
+        mag_mode:  "marg" -> Madgwick MARG da biblioteca (mag no gradiente). Com o
+                             sensor parado, qualquer discordância do mag puxa o yaw
+                             com a força total (beta).
+                   "yaw"  -> Madgwick IMU da biblioteca (acel corrige roll/pitch) e o
+                             mag corrige SÓ o yaw, proporcional ao erro e com taxa
+                             limitada (mag_rate). Mais estável com mag imperfeito.
+        mag_rate:  (modo "yaw") taxa da correção de yaw, em 1/s. 0 desliga o mag.
+        accel_tol: tolerância relativa de |a| em torno de 1 g; fora dela o acel é
+                   ignorado naquele passo (só giroscópio). 0 desliga a rejeição.
+        mag_tol:   tolerância relativa de |m| em relação à média recente; fora dela o
+                   mag é ignorado. 0 desliga a rejeição.
         """
-        self.beta = float(beta)
+        self._lib = _AhrsMadgwick(gain=max(float(beta), 1e-9))   # a lib exige ganho > 0 ao criar
+        self.beta = beta
         self.mag_mode = mag_mode
         self.mag_rate = float(mag_rate)
         self.accel_tol = float(accel_tol)
         self.mag_tol = float(mag_tol)
-        self.q = None  # [w, x, y, z], sensor -> navegação (Z para cima)
-        self._m_ref = None   # média móvel de |m| (para rejeitar perturbações)
+        self.q = None          # [w, x, y, z], sensor -> navegação (Z para cima)
+        self._m_ref = None     # média móvel de |m| (para rejeitar perturbações)
+
+    @property
+    def beta(self):
+        return self._lib.gain
+
+    @beta.setter
+    def beta(self, value):
+        self._lib.gain = float(value)
 
     # ------------------------------------------------------------------
     def _accel_ok(self, a_norm):
@@ -82,30 +96,9 @@ class Madgwick:
 
     # ------------------------------------------------------------------
     def initialize(self, accel, mag):
-        """Atitude inicial por TRIAD (vertical do acel + horizontal do mag)."""
-        up_b = Q.normalize(np.asarray(accel, dtype=float))
-
-        m = np.asarray(mag, dtype=float)
-        if np.linalg.norm(m) < 1e-9:
-            # Sem magnetômetro: usa o eixo X do sensor como "norte" provisório
-            # (ou o Y, se o X estiver alinhado com a vertical). Yaw inicial = 0.
-            m = np.array([1.0, 0.0, 0.0])
-            if abs(np.dot(m, up_b)) > 0.99:
-                m = np.array([0.0, 1.0, 0.0])
-        north_b = Q.normalize(m - np.dot(m, up_b) * up_b)
-        west_b = Q.normalize(np.cross(up_b, north_b))
-
-        # Navegação: X = norte, Y = oeste, Z = cima (base destra: Y = Z x X).
-        up_n = np.array([0.0, 0.0, 1.0])
-        north_n = np.array([1.0, 0.0, 0.0])
-        west_n = np.cross(up_n, north_n)
-
-        B = np.column_stack((north_b, west_b, up_b))
-        N = np.column_stack((north_n, west_n, up_n))
-        self.q = Q.from_matrix(N @ B.T)
+        self.q = triad(accel, mag)
         return self.q.copy()
 
-    # ------------------------------------------------------------------
     def update(self, gyro, accel, mag, dt):
         """Processa uma amostra. gyro em rad/s. Retorna o quaternion."""
         gyro = np.asarray(gyro, dtype=float)
@@ -116,45 +109,17 @@ class Madgwick:
             self._m_ref = None
             return self.initialize(accel, mag)
 
-        q = self.q
-
-        # 1) Giroscópio
-        q_dot = 0.5 * Q.multiply(q, [0.0, *gyro])
-
-        a_norm = np.linalg.norm(accel)
+        use_a = self._accel_ok(np.linalg.norm(accel))
         m_norm = np.linalg.norm(mag)
-        use_a = self._accel_ok(a_norm)
         use_m = self._mag_ok(m_norm)
+        acc = accel if use_a else np.zeros(3)     # vetor nulo = a biblioteca não corrige com o acel
 
-        # 2) Função objetivo e Jacobiana
-        f_list, J_list = [], []
+        if self.mag_mode == "marg" and use_a and use_m:
+            q = self._lib.updateMARG(self.q, gyr=gyro, acc=acc, mag=mag, dt=dt)
+        else:
+            q = self._lib.updateIMU(self.q, gyr=gyro, acc=acc, dt=dt)
+        q = Q.normalize(np.asarray(q, dtype=float))
 
-        if use_a:
-            a = accel / a_norm
-            g_ref = np.array([0.0, 0.0, 1.0])
-            f_list.append(Q.rotate_inverse(q, g_ref) - a)
-            J_list.append(Q.jacobian_of_rotate_inverse(q, g_ref))
-
-            if use_m and self.mag_mode == "marg":
-                m = mag / m_norm
-                h = Q.rotate(q, m)                     # campo em navegação
-                b_ref = np.array([np.hypot(h[0], h[1]), 0.0, h[2]])
-                f_list.append(Q.rotate_inverse(q, b_ref) - m)
-                J_list.append(Q.jacobian_of_rotate_inverse(q, b_ref))
-
-        # 3) Gradiente normalizado e 4) fusão
-        if f_list:
-            f = np.concatenate(f_list)
-            J = np.vstack(J_list)
-            grad = J.T @ f
-            n = np.linalg.norm(grad)
-            if n > 1e-12:
-                q_dot = q_dot - self.beta * grad / n
-
-        # 5) Integração
-        q = Q.normalize(q + q_dot * dt)
-
-        # 6) Modo "yaw": o magnetômetro corrige só o yaw, proporcional ao erro
         if self.mag_mode == "yaw" and use_m and self.mag_rate > 0 and dt > 0:
             q = self._yaw_correction(q, mag / m_norm, dt)
 
@@ -165,8 +130,9 @@ class Madgwick:
     def _yaw_correction(self, q, m, dt):
         """
         Gira a orientação em torno da vertical para alinhar o campo magnético
-        medido ao norte (+X). O erro de yaw é o ângulo do campo, visto no
-        referencial de navegação, em relação a +X. Roll e pitch não mudam.
+        medido ao norte (+X). h = q ⊗ m ⊗ q* é o campo já sem a inclinação do
+        sensor; o ângulo de h em relação a +X é o erro de guinada. Roll e pitch
+        não mudam.
         """
         h = Q.rotate(q, m)
         if np.hypot(h[0], h[1]) < 0.2:      # campo quase vertical: rumo indefinido

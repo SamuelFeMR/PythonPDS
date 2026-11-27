@@ -44,23 +44,6 @@ def rotate_inverse(q, v):
     return multiply(multiply(conjugate(q), [0.0, *v]), q)[1:]
 
 
-def jacobian_of_rotate_inverse(q, d):
-    """
-    Jacobiana 3x4 de g(q) = q* ⊗ d ⊗ q em relação a (w, x, y, z).
-    g é bilinear em q, então  dg/dq_i = conj(e_i) ⊗ d ⊗ q + q* ⊗ d ⊗ e_i.
-    """
-    d4 = np.array([0.0, *d])
-    qc = conjugate(q)
-    J = np.empty((3, 4))
-    for i in range(4):
-        e = np.zeros(4)
-        e[i] = 1.0
-        t1 = multiply(multiply(conjugate(e), d4), q)
-        t2 = multiply(multiply(qc, d4), e)
-        J[:, i] = (t1 + t2)[1:]
-    return J
-
-
 def to_matrix(q):
     """Matriz de rotação R (sensor -> navegação)."""
     w, x, y, z = normalize(q)

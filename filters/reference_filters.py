@@ -14,7 +14,7 @@ rapidamente se o problema está nos sensores/eixos ou no filtro.
 import numpy as np
 
 import quaternion as Q
-from madgwick import Madgwick
+from madgwick import triad
 
 from .base import FilterInput, Param, PoseFilter
 
@@ -23,15 +23,11 @@ class TriadFilter(PoseFilter):
     name = "Acel+Mag (TRIAD)"
     description = "Sem giroscópio: orientação direta de acelerômetro e magnetômetro."
 
-    def __init__(self, **params):
-        super().__init__(**params)
-        self._core = Madgwick(beta=0.0)
-
     def reset(self):
         pass
 
     def update(self, inp: FilterInput) -> np.ndarray:
-        return self._core.initialize(inp.accel, inp.mag)
+        return triad(inp.accel, inp.mag)
 
 
 class GyroOnlyFilter(PoseFilter):
@@ -47,7 +43,7 @@ class GyroOnlyFilter(PoseFilter):
 
     def update(self, inp: FilterInput) -> np.ndarray:
         if self.q is None:
-            self.q = Madgwick(beta=0.0).initialize(inp.accel, inp.mag)
+            self.q = triad(inp.accel, inp.mag)
             return self.q.copy()
         q_dot = 0.5 * Q.multiply(self.q, [0.0, *inp.gyro])
         self.q = Q.normalize(self.q + q_dot * inp.dt)
@@ -82,7 +78,7 @@ class ComplementaryFilter(PoseFilter):
 
     def update(self, inp: FilterInput) -> np.ndarray:
         if self.q is None:
-            self.q = Madgwick(beta=0.0).initialize(inp.accel, inp.mag)
+            self.q = triad(inp.accel, inp.mag)
             return self.q.copy()
         q, dt = self.q, inp.dt
         w = np.asarray(inp.gyro, dtype=float).copy()

@@ -1,4 +1,5 @@
 numpy
+ahrs>=0.4.0      # filtro de Madgwick
 pyserial
 matplotlib
 # scipy  (opcional: salvar dados em .mat)
