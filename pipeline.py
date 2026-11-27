@@ -18,6 +18,7 @@ import numpy as np
 import filter_config
 import geometry
 import imu_axes
+import imu_calib
 import position
 import sphere_color
 import quaternion as Q
@@ -91,6 +92,9 @@ class Pipeline:
         self.imu_axes = imu_axes.load()            # troca de eixos / sentido (imu_axes.json)
         self._cons = np.zeros(3)                   # giro × acelerômetro: Σ d·p, Σ p·p, Σ d·d
         self._cons_prev = None
+        self.imu_cal, self.imu_cal_message = imu_calib.load()   # mín/máx de acel e mag
+        self._cap_sensor = None                    # captura em andamento: "accel" ou "mag"
+        self._cap_buf = []
         self.reload_configs()
 
         self.gyro_bias = np.zeros(3)
@@ -211,6 +215,34 @@ class Pipeline:
                 b = np.degrees(self.gyro_bias)
                 return f"Bias gyro (°/s): {b[0]:+.2f} {b[1]:+.2f} {b[2]:+.2f}"
             return "Bias do gyro: não calibrado"
+
+    # ------------------------------- calibração mín/máx do acelerômetro e do mag
+    def capture_start(self, sensor: str):
+        with self.lock:
+            self._cap_sensor = sensor
+            self._cap_buf = []
+
+    def capture_stop(self):
+        with self.lock:
+            self._cap_sensor = None
+
+    @property
+    def capturing(self):
+        return self._cap_sensor
+
+    def capture_points(self) -> np.ndarray:
+        with self.lock:
+            return np.array(self._cap_buf, dtype=float).reshape(-1, 3)
+
+    def set_imu_cal(self, sensor: str, cal, save: bool = True):
+        """Aplica (ou remove, com cal=None) a calibração de 'accel' ou 'mag'."""
+        with self.lock:
+            self.imu_cal[sensor] = cal
+            self.imu_cal_message = ""
+            self.filter.reset()
+            self._prev_t_us = None
+        if save:
+            imu_calib.save(self.imu_cal)
 
     # ---------------------------------------------------------- controle
     def reset(self):
@@ -352,8 +384,18 @@ class Pipeline:
             if self._t0_us is None:
                 self._t0_us = s.t_us
 
+            if self._cap_sensor == "mag" and np.any(s.mag):
+                self._cap_buf.append(s.mag.copy())                       # bruto
+            elif self._cap_sensor == "accel" and np.linalg.norm(s.gyro) < imu_calib.STILL_DPS:
+                self._cap_buf.append(s.accel.copy())                     # bruto, sensor quase parado
+            acc_raw, mag_raw = s.accel, s.mag       # a fonte Demo já vem calibrada
+            if self.imu_cal["accel"] is not None and not self.force_default_frames:
+                acc_raw = self.imu_cal["accel"].apply(acc_raw)
+            if self.imu_cal["mag"] is not None and np.any(mag_raw) and not self.force_default_frames:
+                mag_raw = self.imu_cal["mag"].apply(mag_raw)
+
             P, sign = self._axes()
-            accel = P @ s.accel
+            accel = P @ acc_raw
             gyro = sign * (P @ (DEG2RAD * s.gyro))
 
             if self._calib_target:
@@ -373,7 +415,7 @@ class Pipeline:
 
             w = gyro - self.gyro_bias
             self._track_consistency(accel, w, dt)
-            mag = P @ s.mag if self.use_mag else np.zeros(3)
+            mag = P @ mag_raw if self.use_mag else np.zeros(3)
 
             q = self.filter.update(FilterInput(accel=accel, gyro=w, mag=mag, dt=dt))
 

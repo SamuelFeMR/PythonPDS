@@ -11,6 +11,7 @@ from filters import MODES
 
 from .dialog_axes import AxesDialog
 from .dialog_geometry import GeometryDialog
+from .dialog_imu_cal import ImuCalDialog
 from .dialog_params import ParamsDialog
 from .plot_window import PlotWindow
 from .render import ToFInfo
@@ -44,6 +45,7 @@ class MainPage(ttk.Frame):
         self._plots = None
         self._axes_dlg = None
         self._params_dlg = None
+        self._cal_dlg = None
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
@@ -144,9 +146,12 @@ class MainPage(ttk.Frame):
                         ).grid(row=nxt(), column=0, columnspan=2, sticky="w", pady=(6, 0))
 
         header("CALIBRAÇÃO")
-        ttk.Button(side, text="Giroscópio (sensor PARADO)",
+        row = nxt()
+        ttk.Button(side, text="Giroscópio (PARADO)",
                    command=lambda: self.pipeline.start_gyro_calibration(200)
-                   ).grid(row=nxt(), column=0, columnspan=2, sticky="we")
+                   ).grid(row=row, column=0, sticky="we", padx=(0, 3))
+        ttk.Button(side, text="Acel / Mag…", command=self._open_cal
+                   ).grid(row=row, column=1, sticky="we", padx=(3, 0))
         row = nxt()
         ttk.Label(side, text="ToF: H conhecida (mm)", style="Panel.TLabel").grid(
             row=row, column=0, sticky="w", pady=(8, 0))
@@ -228,6 +233,12 @@ class MainPage(ttk.Frame):
             return
         self._params_dlg = ParamsDialog(self.app, self.pipeline)
 
+    def _open_cal(self):
+        if self._cal_dlg is not None and self._cal_dlg.winfo_exists():
+            self._cal_dlg.lift()
+            return
+        self._cal_dlg = ImuCalDialog(self.app, self.pipeline)
+
     def _open_plots(self):
         if self._plots is not None and self._plots.winfo_exists():
             self._plots.lift()
@@ -245,6 +256,10 @@ class MainPage(ttk.Frame):
         lines = [f"Filtro: {p.filter_name}" + ("" if p.use_mag else " (sem mag)") + " · filter_config.json"]
         if p.filter_message:
             lines.append("⚠ " + p.filter_message)
+        if p.imu_cal_message:
+            lines.append("⚠ " + p.imu_cal_message)
+        lines.append("Calibração: acel " + ("sim" if p.imu_cal["accel"] is not None else "não")
+                     + " · mag " + ("sim" if p.imu_cal["mag"] is not None else "não"))
         if p.imu_axes.message:
             lines.append("⚠ " + p.imu_axes.message)
         if not p.imu_axes.is_default:
