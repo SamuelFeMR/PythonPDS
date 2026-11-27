@@ -11,7 +11,6 @@ from filters import MODES
 
 from .dialog_axes import AxesDialog
 from .dialog_geometry import GeometryDialog
-from .dialog_mag import MagDialog
 from .dialog_params import ParamsDialog
 from .plot_window import PlotWindow
 from .render import ToFInfo
@@ -45,7 +44,6 @@ class MainPage(ttk.Frame):
         self._plots = None
         self._axes_dlg = None
         self._params_dlg = None
-        self._mag_dlg = None
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
@@ -174,11 +172,8 @@ class MainPage(ttk.Frame):
                    ).grid(row=row, column=0, sticky="we", padx=(0, 3), pady=(4, 0))
         ttk.Button(side, text="Parâmetros…", command=self._open_params
                    ).grid(row=row, column=1, sticky="we", padx=(3, 0), pady=(4, 0))
-        row = nxt()
-        ttk.Button(side, text="Magnetômetro…", command=self._open_mag
-                   ).grid(row=row, column=0, sticky="we", padx=(0, 3), pady=(4, 0))
         ttk.Button(side, text="Gráficos…", command=self._open_plots
-                   ).grid(row=row, column=1, sticky="we", padx=(3, 0), pady=(4, 0))
+                   ).grid(row=nxt(), column=0, columnspan=2, sticky="we", pady=(4, 0))
         self.rec_btn = ttk.Button(side, text="● Gravar CSV", command=self._toggle_rec)
         self.rec_btn.grid(row=nxt(), column=0, columnspan=2, sticky="we", pady=(4, 0))
         self.info = ttk.Label(side, text="", style="Muted.TLabel", wraplength=250, justify="left")
@@ -233,12 +228,6 @@ class MainPage(ttk.Frame):
             return
         self._params_dlg = ParamsDialog(self.app, self.pipeline)
 
-    def _open_mag(self):
-        if self._mag_dlg is not None and self._mag_dlg.winfo_exists():
-            self._mag_dlg.lift()
-            return
-        self._mag_dlg = MagDialog(self.app, self.pipeline)
-
     def _open_plots(self):
         if self._plots is not None and self._plots.winfo_exists():
             self._plots.lift()
@@ -261,13 +250,6 @@ class MainPage(ttk.Frame):
         if not p.imu_axes.is_default:
             lines.append("Eixos: " + " ".join(p.imu_axes.map) + (" · giro invertido" if p.imu_axes.invert_rotation else "")
                          + " · imu_axes.json")
-        if p.mag_cal_message:
-            lines.append("⚠ " + p.mag_cal_message)
-        lines.append("Mag: " + ("calibrado (elipsoide)" if p.mag_cal is not None and p.mag_cal.method == "ellipsoid"
-                                else "calibrado (esfera)" if p.mag_cal is not None else "sem calibração")
-                     + " · mag_calibration.json")
-        lines.append("axes_config.json: " + ("carregado" if p.alignment_loaded
-                                             else "não encontrado (rode check_axes.py)"))
         self.info.configure(text="\n".join(lines))
 
     # --------------------------------------------------------------- H / α

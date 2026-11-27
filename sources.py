@@ -4,7 +4,7 @@ sources.py
 Fontes de linhas CSV. Todas têm:
     readline() -> str | None   (None = nada ainda; EOFError = acabou)
     close()
-    uses_alignment             (False = dados já alinhados; ignora axes_config.json)
+    uses_alignment             (False = dados já alinhados; ignora a troca de eixos)
     label
 """
 
@@ -39,7 +39,7 @@ class SerialSource:
 
 
 class ReplaySource:
-    """Reproduz um CSV gravado (ex.: gravacao.csv do check_axes ou dados_*.csv)."""
+    """Reproduz um CSV gravado (ex.: dados_*.csv gravados pelo programa)."""
     uses_alignment = True
 
     def __init__(self, path: str, speed: float = 1.0):

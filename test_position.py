@@ -21,6 +21,11 @@ import quaternion as Q
 import test_geometry as T
 
 
+def longitude_to_hue(lon_deg):
+    """Matiz (0..1) impresso na longitude dada (inversa de sphere_color.hue_to_longitude)."""
+    return (lon_deg % 360.0) / 360.0 * C.H_MAX
+
+
 def random_quat(rnd):
     q = np.array([rnd.gauss(0, 1) for _ in range(4)])
     return q / np.linalg.norm(q)
@@ -113,7 +118,7 @@ def main():
     cfg = C.ColorConfig()
     worst_lon = 0.0
     for lon in range(0, 360, 3):
-        rgb = colorsys.hsv_to_rgb(C.longitude_to_hue(lon), 1.0, 1.0)
+        rgb = colorsys.hsv_to_rgb(longitude_to_hue(lon), 1.0, 1.0)
         for scale in (80.0, 1300.0):                        # qualquer intensidade do sensor
             got, why = C.read_longitude(*(scale * c for c in rgb), cfg)
             assert got is not None, why

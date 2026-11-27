@@ -50,11 +50,6 @@ class ColorConfig:
     message: str = ""
 
 
-def longitude_to_hue(lon_deg: float) -> float:
-    """Matiz (0..1) da cor impressa na longitude dada (gomos_r9.cor)."""
-    return (lon_deg % 360.0) / 360.0 * H_MAX
-
-
 def hue_to_longitude(h: float) -> float:
     """Inversa: longitude em graus (0..360) de um matiz (gomos_r9.posicao)."""
     return (h / H_MAX) * 360.0 % 360.0

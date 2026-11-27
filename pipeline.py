@@ -8,7 +8,6 @@ O filtro em si fica em filters/ (e madgwick.py). Aqui não há matemática de
 orientação, só a "cola".
 """
 
-import os
 import threading
 from collections import deque
 from dataclasses import dataclass, replace
@@ -19,24 +18,13 @@ import numpy as np
 import filter_config
 import geometry
 import imu_axes
-import magcal
 import position
 import sphere_color
 import quaternion as Q
 from filters import FILTERS, FilterInput, make_filter
 from sample import Sample
-from sensor_io import Frames, load_config
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_NAME = "axes_config.json"
-
-
-def find_file(name):
-    for folder in (os.getcwd(), APP_DIR):
-        path = os.path.join(folder, name)
-        if os.path.exists(path):
-            return path
-    return None
+DEG2RAD = np.pi / 180.0   # giroscópio chega em °/s
 
 
 @dataclass
@@ -82,7 +70,6 @@ class GeometryState:
 
 
 TOF_CAL_N = 50   # amostras (~1 s a 50 Hz) usadas na calibração do ToF
-MAG_CAPTURE_MAX = 20000   # leituras do mag guardadas na captura (≈ 6 min a 50 Hz)
 TOF_AVG_N = 5   # amostras da média móvel dos sensores de distância
 CONS_MIN_RATE = np.radians(8.0)   # só avalia giro × acelerômetro acima de 8 °/s
 CONS_DECAY = 0.995                # janela ≈ 200 amostras
@@ -92,10 +79,7 @@ CONS_MIN_ENERGY = 5e-4            # movimento acumulado mínimo para opinar
 class Pipeline:
     def __init__(self):
         self.lock = threading.RLock()
-        self.force_default_frames = False   # usado pela fonte Demo
-        self.config_path = None
-        self._frames_cfg = Frames(None)
-        self.reload_alignment()
+        self.force_default_frames = False   # fonte Demo: dados já alinhados (ignora imu_axes)
 
         # parâmetros fixos do filtro: filter_config.json
         self.use_mag = True
@@ -107,9 +91,6 @@ class Pipeline:
         self.imu_axes = imu_axes.load()            # troca de eixos / sentido (imu_axes.json)
         self._cons = np.zeros(3)                   # giro × acelerômetro: Σ d·p, Σ p·p, Σ d·d
         self._cons_prev = None
-        self.mag_cal, self.mag_cal_message = magcal.load()   # hard/soft iron (mag_calibration.json)
-        self._mag_buf = []
-        self._mag_capturing = False
         self.reload_configs()
 
         self.gyro_bias = np.zeros(3)
@@ -125,25 +106,6 @@ class Pipeline:
         self._tof_win = deque(maxlen=self.tof_avg_n)   # (dist1, dist2)
         self._tof_cal = None       # calibração em andamento: {"H": altura, "buf": [(d1, d2)]}
         self._tof_cal_text = ""
-
-    # -------------------------------------------------------- alinhamento
-    def reload_alignment(self):
-        with self.lock:
-            self.config_path = find_file(CONFIG_NAME)
-            cfg = load_config(self.config_path) if self.config_path else None
-            self._frames_cfg = Frames(cfg)
-            if hasattr(self, "gyro_bias"):
-                self.gyro_bias[:] = 0.0
-
-    @property
-    def alignment_loaded(self) -> bool:
-        return self._frames_cfg.from_file
-
-    @property
-    def frames(self) -> Frames:
-        if not self.force_default_frames:
-            return self._frames_cfg
-        return Frames(None)
 
     # ------------------------------------------------------------- filtro
     def reload_configs(self):
@@ -193,42 +155,6 @@ class Pipeline:
         """Grava filtro atual + parâmetros + use_mag em filter_config.json."""
         with self.lock:
             return filter_config.save(self.filter_name, self.use_mag, self.filter.values)
-
-    # -------------------------------------- calibração do magnetômetro
-    def mag_capture_start(self):
-        with self.lock:
-            self._mag_buf = []
-            self._mag_capturing = True
-
-    def mag_capture_stop(self) -> int:
-        with self.lock:
-            self._mag_capturing = False
-            return len(self._mag_buf)
-
-    def mag_capture_points(self) -> np.ndarray:
-        with self.lock:
-            return np.array(self._mag_buf, dtype=float).reshape(-1, 3)
-
-    @property
-    def mag_capturing(self) -> bool:
-        return self._mag_capturing
-
-    def fit_mag(self, method: str = "ellipsoid") -> "magcal.MagCal":
-        """Ajusta o elipsoide com o que foi capturado (não aplica). ValueError se faltar dado."""
-        return magcal.fit(magcal.thin(self.mag_capture_points()), method)
-
-    def set_mag_cal(self, cal, save: bool = True):
-        """Aplica a calibração (None = remove e apaga o arquivo)."""
-        with self.lock:
-            self.mag_cal = cal
-            self.mag_cal_message = ""
-            self.filter.reset()       # o módulo do campo mudou: o filtro reinicia
-            self._prev_t_us = None
-        if save:
-            if cal is None:
-                magcal.delete()
-            else:
-                magcal.save(cal)
 
     # ----------------------------------------------- eixos e sentido do IMU
     def set_axes(self, names, invert_rotation: bool, save: bool = True):
@@ -426,10 +352,9 @@ class Pipeline:
             if self._t0_us is None:
                 self._t0_us = s.t_us
 
-            frames = self.frames
             P, sign = self._axes()
             accel = P @ s.accel
-            gyro = sign * (P @ frames.gyro(s.gyro))
+            gyro = sign * (P @ (DEG2RAD * s.gyro))
 
             if self._calib_target:
                 self._calib_buf.append(gyro.copy())
@@ -448,14 +373,7 @@ class Pipeline:
 
             w = gyro - self.gyro_bias
             self._track_consistency(accel, w, dt)
-            if self._mag_capturing and np.any(s.mag) and len(self._mag_buf) < MAG_CAPTURE_MAX:
-                self._mag_buf.append(s.mag.copy())          # bruto, antes de qualquer correção
-            if not self.use_mag:
-                mag = np.zeros(3)
-            elif self.mag_cal is not None:      # hard/soft iron no lugar de offset/scale do axes_config
-                mag = P @ (frames.M @ self.mag_cal.apply(s.mag))
-            else:
-                mag = P @ frames.mag(s.mag)
+            mag = P @ s.mag if self.use_mag else np.zeros(3)
 
             q = self.filter.update(FilterInput(accel=accel, gyro=w, mag=mag, dt=dt))
 

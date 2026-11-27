@@ -23,7 +23,6 @@ class Engine:
         self._stop = threading.Event()
         self._rec_lock = threading.Lock()
         self._rec_file = None
-        self.recording_path = None
 
     @property
     def running(self) -> bool:
@@ -61,7 +60,6 @@ class Engine:
         with self._rec_lock:
             self._close_rec()
             self._rec_file = open(path, "w", encoding="utf-8")
-            self.recording_path = path
 
     def stop_recording(self):
         with self._rec_lock:
@@ -71,7 +69,6 @@ class Engine:
         if self._rec_file:
             self._rec_file.close()
         self._rec_file = None
-        self.recording_path = None
 
     @property
     def recording(self) -> bool:
